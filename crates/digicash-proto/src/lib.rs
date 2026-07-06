@@ -4,10 +4,18 @@
 //! messages, and the typed [`DepositRejection`]. The bank (which depends on
 //! `digicash-core`) owns all validation and the `scheme_id` value; this crate never
 //! restates that value.
+//!
+//! [`AuthHeaders`] carries the per-request authentication metadata (account claim,
+//! timestamp, nonce, signature) that travels in HTTP headers rather than the body, keeping
+//! the body hash stable for the canonical payload (spec v1.2 section 2).
 
+mod auth;
 mod coin;
 mod messages;
 
+pub use auth::{
+    AuthHeaderError, AuthHeaders, HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+};
 pub use coin::Coin;
 pub use messages::{
     BalanceResponse, CreateAccountRequest, DenominationKey, DenominationsResponse,
