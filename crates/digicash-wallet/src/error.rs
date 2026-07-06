@@ -48,7 +48,7 @@ pub enum WalletError {
     #[error("the bank does not serve denomination {0} cents")]
     UnknownDenomination(u64),
 
-    /// The local coin stock cannot cover a spend exactly.
-    #[error("cannot spend {requested} cents exactly: only {available} cents available in coins that fit")]
-    InsufficientCoins { requested: u64, available: u64 },
+    /// The local coin stock cannot make the requested amount exactly.
+    #[error("cannot spend {requested} cents exactly from local coins (holding {held} cents); re-withdraw the exact denominations")]
+    InsufficientCoins { requested: u64, held: u64 },
 }

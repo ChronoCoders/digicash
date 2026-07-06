@@ -84,6 +84,31 @@ impl Wallet {
         self.store.list_coins()
     }
 
+    /// Select coins summing to exactly `amount_cents`, write them as a JSON bundle to
+    /// `out_path`, and remove them from the local store. No bank contact. If the local
+    /// coins cannot make the amount exactly, no bundle is written and an error reports the
+    /// shortfall (no silent rounding or partial spend).
+    pub fn spend(&self, amount_cents: u64, out_path: &Path) -> Result<Vec<Coin>, WalletError> {
+        let held = self.store.list_coins()?;
+        let held_total = held
+            .iter()
+            .map(|c| c.denomination_cents)
+            .fold(0u64, u64::saturating_add);
+        let selected =
+            select_exact(held, amount_cents).ok_or(WalletError::InsufficientCoins {
+                requested: amount_cents,
+                held: held_total,
+            })?;
+        // Write the bundle first (the payee's coins are then preserved on disk), then remove
+        // from the local store so the wallet will not re-spend them.
+        let bundle = serde_json::to_vec_pretty(&selected)?;
+        std::fs::write(out_path, bundle)?;
+        for coin in &selected {
+            self.store.remove_coin(&coin.serial_number)?;
+        }
+        Ok(selected)
+    }
+
     /// Fetch and parse the bank's denomination public keys (scheme 0 only), keyed by
     /// denomination.
     fn bank_public_keys(&self) -> Result<HashMap<u64, DenominationPublicKey>, WalletError> {
@@ -121,6 +146,24 @@ fn new_request_id() -> Result<String, WalletError> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Select coins summing to exactly `amount`, greedily largest first. Returns `None` if the
+/// coins cannot make the amount exactly. Correct for the powers-of-two denomination set.
+fn select_exact(mut coins: Vec<Coin>, amount: u64) -> Option<Vec<Coin>> {
+    coins.sort_unstable_by_key(|c| std::cmp::Reverse(c.denomination_cents));
+    let mut remaining = amount;
+    let mut selected = Vec::new();
+    for coin in coins {
+        if coin.denomination_cents <= remaining {
+            remaining -= coin.denomination_cents;
+            selected.push(coin);
+            if remaining == 0 {
+                break;
+            }
+        }
+    }
+    (remaining == 0).then_some(selected)
 }
 
 #[cfg(test)]
@@ -208,6 +251,69 @@ mod tests {
             wallet.balance().expect("balance").balance_cents,
             1000 - 576,
             "account not debited by the withdrawn amount"
+        );
+    }
+
+    fn coins_of(denoms: &[u64]) -> Vec<digicash_proto::Coin> {
+        denoms
+            .iter()
+            .map(|&d| digicash_proto::Coin {
+                scheme_id: 0,
+                denomination_cents: d,
+                serial_number: [d as u8; 32],
+                signature: vec![],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn select_exact_is_greedy_or_none() {
+        let selected = super::select_exact(coins_of(&[512, 64]), 576).expect("exact");
+        let mut denoms: Vec<u64> = selected.iter().map(|c| c.denomination_cents).collect();
+        denoms.sort_unstable();
+        assert_eq!(denoms, vec![64, 512]);
+
+        assert!(super::select_exact(coins_of(&[512, 64]), 100).is_none());
+        assert!(super::select_exact(coins_of(&[64, 64]), 64).is_some());
+        assert!(super::select_exact(coins_of(&[]), 0).expect("empty exact").is_empty());
+    }
+
+    #[test]
+    fn spend_writes_bundle_and_removes_selected_coins() {
+        use digicash_proto::Coin;
+
+        let (url, _bank) = spawn_test_bank(&[64, 512]);
+        let store_dir = TempDir::new().expect("store");
+        let out_dir = TempDir::new().expect("out");
+        let wallet = Wallet::open(url, store_dir.path().join("store")).expect("wallet");
+        wallet.create_account("alice", 1000).expect("account");
+        wallet.withdraw(576).expect("withdraw"); // coins [512, 64]
+
+        let bundle_path = out_dir.path().join("bundle.json");
+        let spent = wallet.spend(512, &bundle_path).expect("spend");
+        assert_eq!(spent.len(), 1);
+        assert_eq!(spent[0].denomination_cents, 512);
+
+        let bytes = std::fs::read(&bundle_path).expect("read bundle");
+        let bundle: Vec<Coin> = serde_json::from_slice(&bytes).expect("parse bundle");
+        assert_eq!(bundle.len(), 1);
+        assert_eq!(bundle[0].denomination_cents, 512);
+
+        let remaining: Vec<u64> = wallet
+            .stored_coins()
+            .expect("stored")
+            .iter()
+            .map(|c| c.denomination_cents)
+            .collect();
+        assert_eq!(remaining, vec![64], "spent coin not removed, or wrong coin removed");
+
+        match wallet.spend(100, &out_dir.path().join("x.json")) {
+            Err(WalletError::InsufficientCoins { requested: 100, .. }) => {}
+            other => panic!("expected InsufficientCoins, got {other:?}"),
+        }
+        assert!(
+            !out_dir.path().join("x.json").exists(),
+            "a failed spend must not write a bundle"
         );
     }
 }

@@ -62,7 +62,19 @@ pub fn run(cli: Cli) -> Result<(), WalletError> {
                 amount_cents
             )?;
         }
-        Command::Spend { .. } => return Err(WalletError::NotImplemented("spend")),
+        Command::Spend {
+            amount_cents,
+            out: bundle_path,
+        } => {
+            let coins = wallet.spend(amount_cents, &bundle_path)?;
+            writeln!(
+                out,
+                "wrote {} coins totalling {} cents to {}",
+                coins.len(),
+                amount_cents,
+                bundle_path.display()
+            )?;
+        }
         Command::Deposit { .. } => return Err(WalletError::NotImplemented("deposit")),
     }
     Ok(())
