@@ -97,4 +97,13 @@ pub enum BankError {
     /// Building the mTLS client-certificate verifier failed.
     #[error("client certificate verifier error: {0}")]
     ClientVerifier(#[from] rustls::server::VerifierBuilderError),
+
+    /// A registered identity key record was not a valid 32-byte Ed25519 public key.
+    #[error("corrupt identity key for account {account_id}: {message}")]
+    MalformedIdentity {
+        /// The account whose identity key record is corrupt.
+        account_id: String,
+        /// What was wrong with the record.
+        message: String,
+    },
 }

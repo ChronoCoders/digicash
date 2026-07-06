@@ -1,8 +1,9 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use digicash_core::{
-    ensure_supported_scheme, sign_blinded, verify, BlindMessage, DenominationPublicKey, Serial,
-    Signature, SCHEME_ID_RSA_DETERMINISTIC,
+    ensure_supported_scheme, sign_blinded, verify, BlindMessage, DenominationPublicKey,
+    IdentityPublicKey, Serial, Signature, IDENTITY_PUBLIC_KEY_LEN, SCHEME_ID_RSA_DETERMINISTIC,
 };
 use digicash_proto::{
     BalanceResponse, DenominationKey, DepositRejection, DepositRequest, DepositResponse,
@@ -19,6 +20,12 @@ const ACCOUNTS_TREE: &str = "accounts";
 const SPENT_TREE: &str = "spent_serials";
 const WITHDRAWALS_TREE: &str = "withdrawals";
 const DEPOSITS_TREE: &str = "deposits";
+const IDENTITIES_TREE: &str = "identities";
+const NONCES_TREE: &str = "nonces";
+
+/// Prune expired nonces once every this many recorded nonces, bounding the store without an
+/// O(n) scan on every request.
+const NONCE_PRUNE_INTERVAL: u64 = 1024;
 
 /// Persisted state of a withdrawal, keyed by `request_id`. Drives the crash-recoverable
 /// state machine (spec v0.3 section 6.1).
@@ -74,6 +81,9 @@ pub struct Bank {
     spent: sled::Tree,
     withdrawals: sled::Tree,
     deposits: sled::Tree,
+    identities: sled::Tree,
+    nonces: sled::Tree,
+    nonce_ops: AtomicU64,
     keys: KeyStore,
 }
 
@@ -90,6 +100,8 @@ impl Bank {
         let spent = db.open_tree(SPENT_TREE)?;
         let withdrawals = db.open_tree(WITHDRAWALS_TREE)?;
         let deposits = db.open_tree(DEPOSITS_TREE)?;
+        let identities = db.open_tree(IDENTITIES_TREE)?;
+        let nonces = db.open_tree(NONCES_TREE)?;
         let keys = KeyStore::load_or_create(key_dir.as_ref(), denominations)?;
         let bank = Self {
             db,
@@ -97,6 +109,9 @@ impl Bank {
             spent,
             withdrawals,
             deposits,
+            identities,
+            nonces,
+            nonce_ops: AtomicU64::new(0),
             keys,
         };
         bank.recover_withdrawals()?;
@@ -153,6 +168,92 @@ impl Bank {
         Ok(self
             .spent
             .contains_key(spent_key(scheme, denomination_cents, serial))?)
+    }
+
+    /// Register (or replace) the Ed25519 public key `account_id` signs its requests with
+    /// (spec v1.2 section 2). The signature-verification middleware looks the key up by
+    /// account id, so `account_id` in a request is a claim verified against this key.
+    pub fn register_identity(
+        &self,
+        account_id: &str,
+        public_key: &IdentityPublicKey,
+    ) -> Result<(), BankError> {
+        self.identities
+            .insert(account_id.as_bytes(), &public_key.to_bytes())?;
+        self.db.flush()?;
+        Ok(())
+    }
+
+    /// The Ed25519 public key registered for `account_id`, or `None` if none is registered.
+    pub fn identity_pubkey(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<IdentityPublicKey>, BankError> {
+        match self.identities.get(account_id.as_bytes())? {
+            Some(bytes) => {
+                let arr: [u8; IDENTITY_PUBLIC_KEY_LEN] =
+                    bytes.as_ref().try_into().map_err(|_| BankError::MalformedIdentity {
+                        account_id: account_id.to_string(),
+                        message: format!(
+                            "registered key is {} bytes, expected {IDENTITY_PUBLIC_KEY_LEN}",
+                            bytes.len()
+                        ),
+                    })?;
+                Ok(Some(IdentityPublicKey::from_bytes(&arr)?))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Record `nonce` as seen at `now`, returning `true` if it is fresh and `false` if it was
+    /// already recorded within its `ttl_secs` window (a replay). Atomic, so two concurrent
+    /// requests carrying the same nonce cannot both be accepted. Expired nonces are pruned
+    /// periodically so the store stays bounded by the TTL (spec v1.2 section 2).
+    pub fn check_and_record_nonce(
+        &self,
+        nonce: &str,
+        now: u64,
+        ttl_secs: u64,
+    ) -> Result<bool, BankError> {
+        let expiry = now.saturating_add(ttl_secs).to_be_bytes();
+        let key = nonce.as_bytes();
+        let outcome: Result<bool, TransactionError<BankError>> =
+            self.nonces.transaction(|nonces| {
+                if let Some(existing) = nonces.get(key)? {
+                    if decode_u64(&existing) > now {
+                        return Ok(false);
+                    }
+                }
+                nonces.insert(key, &expiry)?;
+                Ok(true)
+            });
+        let fresh = outcome.map_err(txn_err)?;
+        self.db.flush()?;
+        if self.nonce_ops.fetch_add(1, Ordering::Relaxed) % NONCE_PRUNE_INTERVAL
+            == NONCE_PRUNE_INTERVAL - 1
+        {
+            self.prune_nonces(now)?;
+        }
+        Ok(fresh)
+    }
+
+    /// Remove every nonce whose window has closed at or before `now`.
+    fn prune_nonces(&self, now: u64) -> Result<(), BankError> {
+        let mut expired = Vec::new();
+        for entry in self.nonces.iter() {
+            let (k, v) = entry?;
+            if decode_u64(&v) <= now {
+                expired.push(k.to_vec());
+            }
+        }
+        if expired.is_empty() {
+            return Ok(());
+        }
+        for k in expired {
+            self.nonces.remove(k)?;
+        }
+        self.db.flush()?;
+        Ok(())
     }
 
     /// The public key for `(denomination_cents, scheme_id)`, or `None` if the bank does not
@@ -546,6 +647,14 @@ pub(crate) fn spent_key(scheme: u8, denomination_cents: u64, serial: &[u8; 32]) 
     key[1..9].copy_from_slice(&denomination_cents.to_be_bytes());
     key[9..41].copy_from_slice(serial);
     key
+}
+
+/// Decode a big-endian u64, treating any malformed value as `0` (an already-expired nonce
+/// window, so a corrupt entry is overwritten rather than blocking a fresh nonce).
+fn decode_u64(bytes: &[u8]) -> u64 {
+    <[u8; 8]>::try_from(bytes)
+        .map(u64::from_be_bytes)
+        .unwrap_or(0)
 }
 
 fn decode_balance(account_id: &str, bytes: &[u8]) -> Result<u64, BankError> {

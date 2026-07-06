@@ -109,7 +109,8 @@ impl From<BankError> for ApiError {
             | BankError::BalanceOverflow(_)
             | BankError::CertGen(_)
             | BankError::Tls(_)
-            | BankError::ClientVerifier(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | BankError::ClientVerifier(_)
+            | BankError::MalformedIdentity { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,

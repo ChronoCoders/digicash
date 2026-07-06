@@ -557,6 +557,7 @@ dependencies = [
  "axum-server",
  "digicash-core",
  "digicash-proto",
+ "hex",
  "rcgen",
  "rustls",
  "serde",

@@ -6,6 +6,7 @@
 //! here.
 
 mod api;
+mod auth;
 mod bank;
 mod error;
 mod keys;
@@ -15,6 +16,7 @@ mod tls;
 mod integration;
 
 pub use api::router;
+pub use auth::{verify_signed_request, AuthenticatedAccount};
 pub use bank::Bank;
 pub use digicash_proto::DENOMINATIONS;
 pub use error::BankError;
