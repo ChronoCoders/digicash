@@ -6,7 +6,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use digicash_bank::{serve_tls, CertAuthority};
-use digicash_registry::{router, Registry};
+use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
+use digicash_registry::{router, Registry, RegistryError};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,6 +21,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("DIGICASH_REGISTRY_ADDR").unwrap_or_else(|_| "127.0.0.1:4000".to_string());
 
     let registry = Arc::new(Registry::connect(&database_url).await?);
+    // Seed the governance admin from its published Ed25519 key, if configured. Idempotent
+    // across restarts.
+    if let Ok(admin_pubkey_hex) = std::env::var("DIGICASH_REGISTRY_ADMIN_PUBKEY") {
+        let raw = hex::decode(admin_pubkey_hex.trim())?;
+        let bytes: [u8; IDENTITY_PUBLIC_KEY_LEN] = raw
+            .as_slice()
+            .try_into()
+            .map_err(|_| "DIGICASH_REGISTRY_ADMIN_PUBKEY must be a 32-byte hex key")?;
+        let pubkey = IdentityPublicKey::from_bytes(&bytes)?;
+        match registry.register_member("admin", &pubkey, true).await {
+            Ok(()) => tracing::info!("registered governance admin"),
+            Err(RegistryError::MemberExists(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
     let ca = CertAuthority::load_or_create(Path::new(&key_dir))?;
     let server_config = ca.server_config()?;
     let app = router(registry);

@@ -7,6 +7,7 @@
 //! banks and the admin authenticate the same way wallets authenticate to a bank.
 
 mod api;
+mod auth;
 mod db;
 mod error;
 mod registry;

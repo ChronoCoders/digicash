@@ -12,11 +12,13 @@
 mod auth;
 mod coin;
 mod messages;
+mod registry;
 
 pub use auth::{
     AuthHeaderError, AuthHeaders, HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP,
 };
 pub use coin::Coin;
+pub use registry::{MemberInfo, MembersResponse, RegisterMemberRequest};
 pub use messages::{
     BalanceResponse, CreateAccountRequest, DenominationKey, DenominationsResponse,
     DepositRejection, DepositRequest, DepositResponse, ErrorResponse, RegisterRequest,
@@ -101,6 +103,28 @@ mod tests {
         ] {
             roundtrip(reason);
         }
+    }
+
+    #[test]
+    fn registry_messages_roundtrip() {
+        roundtrip(RegisterMemberRequest {
+            bank_id: "bank-a".into(),
+            pubkey_hex: "aa".repeat(32),
+        });
+        roundtrip(MembersResponse {
+            members: vec![
+                MemberInfo {
+                    bank_id: "admin".into(),
+                    pubkey_hex: "bb".repeat(32),
+                    is_admin: true,
+                },
+                MemberInfo {
+                    bank_id: "bank-a".into(),
+                    pubkey_hex: "cc".repeat(32),
+                    is_admin: false,
+                },
+            ],
+        });
     }
 
     #[test]

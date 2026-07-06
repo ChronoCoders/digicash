@@ -41,4 +41,8 @@ pub enum RegistryError {
         /// What was wrong with the record.
         message: String,
     },
+
+    /// Registration was requested for a `bank_id` that is already a member.
+    #[error("bank {0} is already a registered member")]
+    MemberExists(String),
 }
