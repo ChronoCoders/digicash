@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
     about = "Withdraw, spend, and deposit digicash e-cash"
 )]
 pub struct Cli {
+    /// The subcommand to run.
     #[command(subcommand)]
     pub command: Command,
 }
@@ -19,21 +20,28 @@ pub struct Cli {
 pub enum Command {
     /// Account operations.
     Account {
+        /// The account subcommand.
         #[command(subcommand)]
         action: AccountAction,
     },
     /// Show this wallet's account balance.
     Balance,
     /// Withdraw coins totalling AMOUNT_CENTS from the account.
-    Withdraw { amount_cents: u64 },
+    Withdraw {
+        /// Total to withdraw, in cents.
+        amount_cents: u64,
+    },
     /// Select coins totalling AMOUNT_CENTS into a bundle file (no bank contact).
     Spend {
+        /// Total to spend, in cents.
         amount_cents: u64,
+        /// File to write the coin bundle to.
         #[arg(long)]
         out: PathBuf,
     },
     /// Deposit the coins in a bundle file to the bank.
     Deposit {
+        /// Bundle file to deposit.
         #[arg(long = "in")]
         input: PathBuf,
     },
@@ -44,7 +52,9 @@ pub enum Command {
 pub enum AccountAction {
     /// Create this wallet's account with a starting balance (demo credit).
     Create {
+        /// The account id to create.
         account_id: String,
+        /// Starting balance to credit, in cents.
         #[arg(long, default_value_t = 0)]
         balance: u64,
     },

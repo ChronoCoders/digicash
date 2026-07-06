@@ -1,3 +1,5 @@
+//! The digicash wallet CLI binary: parse arguments and dispatch to the wallet library.
+
 use std::io::Write;
 use std::process::ExitCode;
 

@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+warnings = { level = "deny", priority = -1 }
+missing_docs = "warn"
 
 [dependencies]
 digicash-core = { workspace = true }

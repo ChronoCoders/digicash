@@ -17,8 +17,11 @@ use crate::store::Store;
 /// The result of depositing one coin from a bundle.
 #[derive(Debug)]
 pub struct DepositOutcome {
+    /// The coin's denomination, in cents.
     pub denomination_cents: u64,
+    /// Whether the coin was accepted and credited.
     pub accepted: bool,
+    /// Why the coin was rejected, when `accepted` is false.
     pub reason: Option<DepositRejection>,
 }
 

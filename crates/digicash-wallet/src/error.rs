@@ -16,7 +16,9 @@ pub enum WalletError {
     /// An HTTP request to the bank failed (transport or non-2xx status).
     #[error("bank request to {url} failed: {source}")]
     Http {
+        /// The URL that was requested.
         url: String,
+        /// The underlying transport or status error.
         source: Box<ureq::Error>,
     },
 
@@ -50,5 +52,10 @@ pub enum WalletError {
 
     /// The local coin stock cannot make the requested amount exactly.
     #[error("cannot spend {requested} cents exactly from local coins (holding {held} cents); re-withdraw the exact denominations")]
-    InsufficientCoins { requested: u64, held: u64 },
+    InsufficientCoins {
+        /// The amount requested, in cents.
+        requested: u64,
+        /// The total value of coins held, in cents.
+        held: u64,
+    },
 }
