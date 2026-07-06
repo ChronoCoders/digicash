@@ -92,6 +92,7 @@ async fn authenticate(bank: &Bank, request: Request) -> Result<Request, AuthReje
     // fill the nonce store, and a replay of a valid request is caught here.
     let fresh = bank
         .check_and_record_nonce(&auth.nonce, now, NONCE_TTL_SECS)
+        .await
         .map_err(AuthRejection::internal)?;
     if !fresh {
         return Err(AuthRejection::unauthorized("nonce already used (replay)"));

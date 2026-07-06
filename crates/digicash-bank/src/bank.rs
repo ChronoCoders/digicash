@@ -15,11 +15,8 @@ use crate::db;
 use crate::error::BankError;
 use crate::keys::KeyStore;
 
-const NONCES_TREE: &str = "nonces";
-const NONCE_DB_DIR: &str = "nonce-db";
-
-/// Prune expired nonces once every this many recorded nonces, bounding the store without an
-/// O(n) scan on every request.
+/// Purge expired nonces once every this many recorded nonces, bounding the store between the
+/// startup purge without a delete on every request.
 const NONCE_PRUNE_INTERVAL: u64 = 1024;
 
 /// State of a withdrawal, keyed by `request_id` (production-spec v1.3 section 4.1).
@@ -80,21 +77,18 @@ enum DepositOutcome {
 }
 
 /// The bank: a Postgres-backed account ledger, spent-serial store, withdrawal state machine,
-/// and deposit idempotency index (production-spec v1.3 section 4), plus an in-memory
-/// denomination key store loaded from a key directory at startup. The anti-replay nonce store
-/// is still sled-backed here and moves to Postgres in a later unit.
+/// deposit idempotency index, and anti-replay nonce store (production-spec v1.3 section 4),
+/// plus an in-memory denomination key store loaded from a key directory at startup.
 pub struct Bank {
     pool: Pool,
-    nonces: sled::Tree,
-    nonce_db: sled::Db,
     nonce_ops: AtomicU64,
     keys: KeyStore,
 }
 
 impl Bank {
     /// Connect to Postgres at `database_url`, run schema migrations, load denomination keys
-    /// from `key_dir` (generating any that are missing), and open the sled nonce store under
-    /// `key_dir`.
+    /// from `key_dir` (generating any that are missing), recover in-flight withdrawals, and
+    /// purge expired nonces.
     pub async fn connect(
         database_url: &str,
         key_dir: impl AsRef<Path>,
@@ -103,17 +97,14 @@ impl Bank {
         let key_dir = key_dir.as_ref();
         db::run_migrations(database_url).await?;
         let pool = db::create_pool(database_url)?;
-        let nonce_db = sled::open(key_dir.join(NONCE_DB_DIR))?;
-        let nonces = nonce_db.open_tree(NONCES_TREE)?;
         let keys = KeyStore::load_or_create(key_dir, denominations)?;
         let bank = Self {
             pool,
-            nonces,
-            nonce_db,
             nonce_ops: AtomicU64::new(0),
             keys,
         };
         bank.recover_withdrawals().await?;
+        bank.purge_expired_nonces(now_unix()).await?;
         Ok(bank)
     }
 
@@ -164,12 +155,6 @@ impl Bank {
                 WithdrawState::Completed | WithdrawState::Compensated => {}
             }
         }
-        Ok(())
-    }
-
-    /// Flush the sled nonce store to disk.
-    pub fn flush(&self) -> Result<(), BankError> {
-        self.nonce_db.flush()?;
         Ok(())
     }
 
@@ -265,56 +250,42 @@ impl Bank {
     }
 
     /// Record `nonce` as seen at `now`, returning `true` if fresh and `false` on replay within
-    /// `ttl_secs`. Sled-backed here; moves to Postgres in a later unit.
-    pub fn check_and_record_nonce(
+    /// `ttl_secs` (production-spec v1.3 sections 2 and 4). Atomic via the primary-key unique
+    /// constraint: an `INSERT ... ON CONFLICT DO UPDATE` that only takes effect when the
+    /// stored nonce has already expired, so two concurrent requests with the same nonce cannot
+    /// both be accepted. Expired nonces are purged on startup and periodically thereafter.
+    pub async fn check_and_record_nonce(
         &self,
         nonce: &str,
         now: u64,
         ttl_secs: u64,
     ) -> Result<bool, BankError> {
-        let expiry = now.saturating_add(ttl_secs).to_be_bytes();
-        let key = nonce.as_bytes();
-        let outcome: Result<bool, sled::transaction::TransactionError<()>> =
-            self.nonces.transaction(|nonces| {
-                if let Some(existing) = nonces.get(key)? {
-                    if decode_u64(&existing) > now {
-                        return Ok(false);
-                    }
-                }
-                nonces.insert(key, &expiry)?;
-                Ok(true)
-            });
-        let fresh = outcome.map_err(|e| match e {
-            sled::transaction::TransactionError::Storage(e) => BankError::Sled(e),
-            sled::transaction::TransactionError::Abort(()) => {
-                BankError::Sled(sled::Error::Unsupported("nonce transaction aborted".to_string()))
-            }
-        })?;
-        self.nonce_db.flush()?;
+        let expiry = to_i64(now.saturating_add(ttl_secs), "nonce expiry")?;
+        let now = to_i64(now, "nonce timestamp")?;
+        let client = self.pool.get().await?;
+        let affected = client
+            .execute(
+                "INSERT INTO nonce_store (nonce, expires_at) VALUES ($1, $2) \
+                 ON CONFLICT (nonce) DO UPDATE SET expires_at = EXCLUDED.expires_at \
+                 WHERE nonce_store.expires_at <= $3",
+                &[&nonce, &expiry, &now],
+            )
+            .await?;
         if self.nonce_ops.fetch_add(1, Ordering::Relaxed) % NONCE_PRUNE_INTERVAL
             == NONCE_PRUNE_INTERVAL - 1
         {
-            self.prune_nonces(now)?;
+            self.purge_expired_nonces(to_u64(now, "nonce timestamp")?).await?;
         }
-        Ok(fresh)
+        Ok(affected == 1)
     }
 
-    /// Remove every nonce whose window closed at or before `now`.
-    fn prune_nonces(&self, now: u64) -> Result<(), BankError> {
-        let mut expired = Vec::new();
-        for entry in self.nonces.iter() {
-            let (k, v) = entry?;
-            if decode_u64(&v) <= now {
-                expired.push(k.to_vec());
-            }
-        }
-        if expired.is_empty() {
-            return Ok(());
-        }
-        for k in expired {
-            self.nonces.remove(k)?;
-        }
-        self.nonce_db.flush()?;
+    /// Delete every nonce whose window closed at or before `now`.
+    async fn purge_expired_nonces(&self, now: u64) -> Result<(), BankError> {
+        let now = to_i64(now, "nonce timestamp")?;
+        let client = self.pool.get().await?;
+        client
+            .execute("DELETE FROM nonce_store WHERE expires_at <= $1", &[&now])
+            .await?;
         Ok(())
     }
 
@@ -685,9 +656,10 @@ fn to_u64(value: i64, what: &str) -> Result<u64, BankError> {
     u64::try_from(value).map_err(|_| BankError::ValueRange(format!("{what} is negative: {value}")))
 }
 
-fn decode_u64(bytes: &[u8]) -> u64 {
-    <[u8; 8]>::try_from(bytes)
-        .map(u64::from_be_bytes)
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
@@ -763,6 +735,37 @@ mod tests {
             serial_number: *serial.as_bytes(),
             signature: sig.0,
         }
+    }
+
+    #[tokio::test]
+    async fn nonce_accepted_once_and_replay_rejected() {
+        let tmp = TempDir::new().expect("tempdir");
+        let (bank, _db) = bank_or_skip!(&tmp, &[]);
+        let now = 1_700_000_000;
+        assert!(bank.check_and_record_nonce("n1", now, 120).await.expect("first"));
+        assert!(
+            !bank.check_and_record_nonce("n1", now, 120).await.expect("replay"),
+            "a nonce replayed within its window must be rejected"
+        );
+        // A different nonce is still fresh.
+        assert!(bank.check_and_record_nonce("n2", now, 120).await.expect("other nonce"));
+    }
+
+    #[tokio::test]
+    async fn expired_nonce_is_reusable_and_purged() {
+        let tmp = TempDir::new().expect("tempdir");
+        let (bank, _db) = bank_or_skip!(&tmp, &[]);
+        let t0 = 1_700_000_000;
+        assert!(bank.check_and_record_nonce("n1", t0, 120).await.expect("first"));
+        // Past the window, the same nonce is fresh again (the expired-row update path).
+        let later = t0 + 121;
+        assert!(
+            bank.check_and_record_nonce("n1", later, 120).await.expect("after expiry"),
+            "a nonce whose window has closed must be acceptable again"
+        );
+        // Purge removes rows expired at the given time; a fresh nonce still works afterward.
+        bank.purge_expired_nonces(later + 1_000).await.expect("purge");
+        assert!(bank.check_and_record_nonce("n2", later + 1_100, 120).await.expect("fresh"));
     }
 
     #[tokio::test]
