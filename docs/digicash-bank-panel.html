@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>digicash — bank operator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F3EEE3;
+    --surface: #FFFFFF;
+    --surface-2: #FBF7EF;
+    --ink: #2B2721;
+    --ink-soft: #756E60;
+    --ink-faint: #A0978A;
+    --line: #E7DFD0;
+    --line-strong: #DBD0BC;
+    --accent: #A66E12;
+    --accent-2: #C68A22;
+    --accent-soft: #F0E3C8;
+    --accent-ink: #6E480B;
+    --live: #1E9E5A;
+    --live-soft: #DCEFE2;
+    --danger: #C0392B;
+    --danger-soft: #FDECEA;
+    --warn: #B45309;
+    --warn-soft: #FEF3E2;
+    --radius-xl: 24px;
+    --radius-lg: 18px;
+    --radius-md: 12px;
+    --shadow: 0 1px 2px rgba(43,39,33,.04), 0 8px 28px rgba(43,39,33,.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    line-height: 1.55;
+    padding: 32px 20px 72px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { font-family: 'Poppins', sans-serif; letter-spacing: -0.01em; }
+
+  /* Top bar */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-bottom: 28px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand .mark { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 24px; color: var(--ink); }
+  .brand .mark b { color: var(--accent); }
+  .brand .sub { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); }
+  .uptime { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-faint); }
+
+  /* Status strip */
+  .status-strip {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius-xl); padding: 16px 24px;
+    display: flex; align-items: center; gap: 32px; flex-wrap: wrap;
+    margin-bottom: 28px; box-shadow: var(--shadow);
+  }
+  .status-item { display: flex; align-items: center; gap: 9px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.live { background: var(--live); box-shadow: 0 0 0 4px var(--live-soft); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
+  .dot.dead { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); }
+  .status-item .label { font-size: 13px; color: var(--ink-soft); font-weight: 500; }
+  .status-item .val { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-faint); }
+  .status-divider { width: 1px; height: 20px; background: var(--line); flex: none; }
+
+  /* Section heading */
+  .sec-head { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
+  .sec-head .bar { width: 4px; height: 20px; border-radius: 2px; background: var(--accent); flex: none; }
+  .sec-head h2 { font-size: 18px; font-weight: 600; color: var(--ink); }
+  .sec-head .meta { margin-left: auto; font-size: 12.5px; color: var(--ink-faint); }
+
+  /* Metric grid */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius-xl); padding: 22px 22px 18px;
+    box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .tile .t-label { font-size: 12px; color: var(--ink-faint); font-weight: 500; letter-spacing: .02em; margin-bottom: 10px; }
+  .tile .t-val { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 32px; color: var(--ink); letter-spacing: -0.02em; line-height: 1; }
+  .tile .t-unit { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-faint); margin-top: 6px; }
+  .tile .t-sub { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .tile .t-row { display: flex; justify-content: space-between; align-items: center; margin-top: 5px; font-size: 12px; }
+  .tile .t-row .rk { color: var(--ink-soft); }
+  .tile .t-row .rv { font-family: 'JetBrains Mono', monospace; color: var(--ink); font-weight: 600; }
+  .tile .t-row .rv.danger { color: var(--danger); }
+  .tile .t-row .rv.warn { color: var(--warn); }
+  .tile .accent-bar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+    background: var(--accent); opacity: .18; border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  }
+  .tile.alert .accent-bar { background: var(--danger); opacity: .35; }
+
+  /* Audit trail */
+  .audit-wrap {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius-xl); box-shadow: var(--shadow); overflow: hidden;
+  }
+  .audit-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 24px; border-bottom: 1px solid var(--line);
+  }
+  .audit-head .ah-left { display: flex; align-items: center; gap: 12px; }
+  .audit-head h3 { font-size: 15px; font-weight: 600; }
+  .audit-badge {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 6px;
+    background: var(--accent-soft); color: var(--accent-ink); font-weight: 600;
+  }
+  .audit-note { font-size: 12px; color: var(--ink-faint); }
+
+  .audit-table { width: 100%; border-collapse: collapse; }
+  .audit-table thead tr { border-bottom: 1px solid var(--line); }
+  .audit-table th {
+    font-size: 11px; font-weight: 600; color: var(--ink-faint);
+    letter-spacing: .06em; text-transform: uppercase;
+    padding: 10px 24px; text-align: left;
+  }
+  .audit-table td { padding: 13px 24px; font-size: 13px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .audit-table tr:last-child td { border-bottom: none; }
+  .audit-table tr:hover td { background: var(--surface-2); }
+
+  .op-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace; letter-spacing: .04em;
+  }
+  .op-withdraw { background: var(--accent-soft); color: var(--accent-ink); }
+  .op-deposit { background: var(--live-soft); color: #145C37; }
+  .op-rejected { background: var(--danger-soft); color: var(--danger); }
+  .op-credit { background: #EEF2FF; color: #3730A3; }
+
+  .acct-id { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-soft); }
+  .req-id { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-faint); }
+  .amount { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--ink); }
+  .denom { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-faint); }
+  .ts { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
+
+  .audit-foot {
+    padding: 13px 24px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface-2);
+  }
+  .audit-foot .fn { font-size: 12px; color: var(--ink-faint); }
+  .audit-foot .fn b { color: var(--ink-soft); font-weight: 600; }
+
+  /* No-serial notice */
+  .no-serial {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--ink-faint); font-style: italic;
+  }
+
+  @media (max-width: 720px) {
+    .metrics { grid-template-columns: 1fr 1fr; }
+    .audit-table th:nth-child(4), .audit-table td:nth-child(4) { display: none; }
+  }
+  @media (max-width: 480px) {
+    .metrics { grid-template-columns: 1fr; }
+    .status-strip { gap: 16px; }
+    .status-divider { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <span class="mark">digi<b>cash</b></span>
+      <span class="sub">bank operator</span>
+    </div>
+    <div class="uptime num" id="uptimeClock">uptime 00:00:00</div>
+  </div>
+
+  <!-- Status strip -->
+  <div class="status-strip">
+    <div class="status-item">
+      <span class="dot live"></span>
+      <span class="label">Bank online</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">
+      <span class="dot live"></span>
+      <span class="label">sled healthy</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">
+      <span class="dot live"></span>
+      <span class="label">Key store</span>
+      <span class="val num">14 keys loaded</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">
+      <span class="dot live"></span>
+      <span class="label">Accounts</span>
+      <span class="val num" id="acctCount">3 active</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">
+      <span class="dot live"></span>
+      <span class="label">Spent serials</span>
+      <span class="val num" id="serialCount">2 recorded</span>
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="sec-head">
+    <span class="bar"></span>
+    <h2>Activity</h2>
+    <span class="meta" id="windowLabel">last 60 min</span>
+  </div>
+
+  <div class="metrics">
+    <div class="tile">
+      <div class="t-label">Withdrawals</div>
+      <div class="t-val num" id="wCount">4</div>
+      <div class="t-unit">requests</div>
+      <div class="t-sub">
+        <div class="t-row"><span class="rk">Accepted</span><span class="rv num">4</span></div>
+        <div class="t-row"><span class="rk">Idempotent retries</span><span class="rv num">1</span></div>
+        <div class="t-row"><span class="rk">Compensated</span><span class="rv num">0</span></div>
+      </div>
+      <div class="accent-bar"></div>
+    </div>
+
+    <div class="tile">
+      <div class="t-label">Deposits</div>
+      <div class="t-val num" id="dCount">2</div>
+      <div class="t-unit">requests</div>
+      <div class="t-sub">
+        <div class="t-row"><span class="rk">Accepted</span><span class="rv num">2</span></div>
+        <div class="t-row"><span class="rk">Idempotent retries</span><span class="rv num">0</span></div>
+        <div class="t-row"><span class="rk">Bad signature</span><span class="rv num">0</span></div>
+      </div>
+      <div class="accent-bar"></div>
+    </div>
+
+    <div class="tile alert">
+      <div class="t-label">Rejections</div>
+      <div class="t-val num" id="rCount">1</div>
+      <div class="t-unit">by reason</div>
+      <div class="t-sub">
+        <div class="t-row"><span class="rk">Double spend</span><span class="rv danger num">1</span></div>
+        <div class="t-row"><span class="rk">Bad signature</span><span class="rv num">0</span></div>
+        <div class="t-row"><span class="rk">Insufficient funds</span><span class="rv num">0</span></div>
+      </div>
+      <div class="accent-bar"></div>
+    </div>
+
+    <div class="tile">
+      <div class="t-label">Total value moved</div>
+      <div class="t-val num" id="totalVal">$5.76</div>
+      <div class="t-unit">in cents: <span id="totalCents">576</span></div>
+      <div class="t-sub">
+        <div class="t-row"><span class="rk">Withdrawn</span><span class="rv num">$5.76</span></div>
+        <div class="t-row"><span class="rk">Deposited</span><span class="rv num">$5.12</span></div>
+        <div class="t-row"><span class="rk">In circulation</span><span class="rv warn num">$0.64</span></div>
+      </div>
+      <div class="accent-bar"></div>
+    </div>
+  </div>
+
+  <!-- Audit trail -->
+  <div class="sec-head">
+    <span class="bar"></span>
+    <h2>Audit trail</h2>
+    <span class="meta">append-only · no UPDATE · no DELETE</span>
+  </div>
+
+  <div class="audit-wrap">
+    <div class="audit-head">
+      <div class="ah-left">
+        <h3>Balance-changing operations</h3>
+        <span class="audit-badge">append-only</span>
+      </div>
+      <span class="audit-note">Serial numbers are never logged</span>
+    </div>
+
+    <table class="audit-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Operation</th>
+          <th>Account</th>
+          <th>Denomination</th>
+          <th>Amount</th>
+          <th>Request ID</th>
+        </tr>
+      </thead>
+      <tbody id="auditBody"></tbody>
+    </table>
+
+    <div class="audit-foot">
+      <span class="fn">Showing last <b id="shownCount">0</b> entries</span>
+      <span class="fn no-serial">Serial numbers withheld — theft prevention, not privacy</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const ENTRIES = [
+    { ts: "09:14:02", op: "credit",   account: "acc_a1b2",  denom: null,  amount: 100000, reqId: "adm-0001" },
+    { ts: "09:14:05", op: "credit",   account: "acc_c3d4",  denom: null,  amount: 50000,  reqId: "adm-0002" },
+    { ts: "09:14:09", op: "credit",   account: "acc_e5f6",  denom: null,  amount: 20000,  reqId: "adm-0003" },
+    { ts: "09:15:33", op: "withdraw", account: "acc_a1b2",  denom: 256,   amount: -256,   reqId: "w-7f3a1c" },
+    { ts: "09:15:33", op: "withdraw", account: "acc_a1b2",  denom: 256,   amount: -256,   reqId: "w-7f3a1c" },
+    { ts: "09:16:01", op: "withdraw", account: "acc_a1b2",  denom: 128,   amount: -128,   reqId: "w-8b2e4d" },
+    { ts: "09:16:44", op: "withdraw", account: "acc_c3d4",  denom: 512,   amount: -512,   reqId: "w-2c9f5a" },
+    { ts: "09:17:12", op: "withdraw", account: "acc_a1b2",  denom: 64,    amount: -64,    reqId: "w-1a4d7e" },
+    { ts: "09:18:05", op: "deposit",  account: "acc_c3d4",  denom: 256,   amount: 256,    reqId: "d-9e1b3f" },
+    { ts: "09:18:22", op: "deposit",  account: "acc_e5f6",  denom: 512,   amount: 512,    reqId: "d-4f2a8c" },
+    { ts: "09:19:01", op: "rejected", account: "acc_e5f6",  denom: 256,   amount: 0,      reqId: "d-3c7b2a" },
+  ];
+
+  const opLabel = { withdraw: "Withdraw", deposit: "Deposit", rejected: "Rejected", credit: "Admin credit" };
+  const opClass = { withdraw: "op-withdraw", deposit: "op-deposit", rejected: "op-rejected", credit: "op-credit" };
+
+  function fmtAmount(op, cents) {
+    if (op === "rejected") return "<span class='amount' style='color:var(--danger)'>rejected</span>";
+    const sign = cents < 0 ? "-" : "+";
+    const abs = Math.abs(cents);
+    const dollars = Math.floor(abs / 100);
+    const c = String(abs % 100).padStart(2, "0");
+    return `<span class='amount'>${sign}$${dollars}.${c}</span>`;
+  }
+
+  function fmtDenom(denom) {
+    if (!denom) return "<span class='denom'>—</span>";
+    return `<span class='denom'>${denom}¢</span>`;
+  }
+
+  function renderAudit() {
+    const tbody = document.getElementById("auditBody");
+    const seen = new Set();
+    tbody.innerHTML = ENTRIES.map((e, i) => {
+      const isRetry = e.op === "withdraw" && seen.has(e.reqId);
+      seen.add(e.reqId);
+      const retryNote = isRetry ? " <span style='font-size:10px;color:var(--ink-faint);'>(retry)</span>" : "";
+      return `<tr>
+        <td class="ts">${e.ts}</td>
+        <td><span class="op-badge ${opClass[e.op]}">${opLabel[e.op]}</span>${retryNote}</td>
+        <td class="acct-id">${e.account}</td>
+        <td>${fmtDenom(e.denom)}</td>
+        <td>${fmtAmount(e.op, e.amount)}</td>
+        <td class="req-id">${e.reqId}</td>
+      </tr>`;
+    }).join("");
+    document.getElementById("shownCount").textContent = ENTRIES.length;
+  }
+
+  // Uptime clock
+  const start = Date.now();
+  function updateClock() {
+    const s = Math.floor((Date.now() - start) / 1000);
+    const h = String(Math.floor(s / 3600)).padStart(2, "0");
+    const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+    const sc = String(s % 60).padStart(2, "0");
+    document.getElementById("uptimeClock").textContent = `uptime ${h}:${m}:${sc}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  renderAudit();
+</script>
+</body>
+</html>

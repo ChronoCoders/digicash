@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>digicash — Private Digital Cash Infrastructure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #F3EEE3;
+  --surface: #FFFFFF;
+  --surface-2: #FBF7EF;
+  --ink: #2B2721;
+  --ink-soft: #756E60;
+  --ink-faint: #A0978A;
+  --line: #E7DFD0;
+  --line-strong: #DBD0BC;
+  --accent: #A66E12;
+  --accent-2: #C68A22;
+  --accent-soft: #F0E3C8;
+  --accent-ink: #6E480B;
+  --live: #1E9E5A;
+  --live-soft: #DCEFE2;
+  --navy: #0F1B2D;
+  --navy-mid: #1B3A6B;
+  --blue: #3B82F6;
+  --blue-light: #60A5FA;
+  --shadow: 0 1px 2px rgba(43,39,33,.04), 0 8px 28px rgba(43,39,33,.07);
+  --shadow-lg: 0 2px 4px rgba(43,39,33,.06), 0 20px 60px rgba(43,39,33,.12);
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+h1,h2,h3,h4 { font-family: 'Poppins', sans-serif; letter-spacing: -0.02em; }
+
+/* NAV */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(243,238,227,0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding: 0 48px;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 64px;
+}
+.nav-brand { display: flex; align-items: center; gap: 12px; }
+.nav-mark { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; width: 22px; height: 22px; }
+.nav-mark span { display: block; border-radius: 2px; background: var(--ink-soft); }
+.nav-mark span:last-child { background: var(--accent); }
+.nav-mark span:nth-child(2) { transform: translateY(1px); }
+.nav-mark span:nth-child(3) { transform: translateX(1px); }
+.brand-name { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 18px; color: var(--ink); }
+.brand-name b { color: var(--accent); }
+.nav-links { display: flex; align-items: center; gap: 32px; }
+.nav-links a { font-size: 14px; color: var(--ink-soft); text-decoration: none; font-weight: 500; transition: color .15s; }
+.nav-links a:hover { color: var(--ink); }
+.nav-cta {
+  background: var(--ink); color: var(--bg); border: none;
+  font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 14px;
+  padding: 10px 22px; border-radius: 10px; cursor: pointer;
+  text-decoration: none; display: inline-block; transition: background .15s;
+}
+.nav-cta:hover { background: var(--accent-ink); }
+
+/* HERO */
+.hero {
+  background: var(--navy);
+  padding: 80px 48px 80px;
+  position: relative; overflow: hidden;
+}
+.hero::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse 60% 80% at 70% 50%, rgba(166,110,18,0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+.hero-inner {
+  max-width: 1100px; margin: 0 auto;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center;
+}
+.hero-left {}
+.hero h1 {
+  font-size: clamp(36px, 5vw, 60px);
+  font-weight: 800; color: #fff; line-height: 1.08;
+  margin: 0 0 22px;
+}
+.hero h1 em { color: #F0C97A; font-style: normal; }
+.hero-sub {
+  font-size: clamp(15px, 1.8vw, 18px); color: #8AA0BE;
+  max-width: 440px; margin: 0 0 36px; line-height: 1.65;
+}
+.hero-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.hero-stats { display: flex; gap: 32px; margin-top: 40px; }
+.hero-stat .hs-val { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 22px; color: #fff; }
+.hero-stat .hs-label { font-size: 12px; color: #6B8AAA; margin-top: 2px; }
+
+/* COIN ANIMATION */
+.hero-right { position: relative; height: 420px; }
+.coin-scene { width: 100%; height: 100%; position: relative; }
+.coin-scene svg { width: 100%; height: 100%; overflow: visible; }
+
+@keyframes coinTravel {
+  0%   { offset-distance: 0%;   opacity: 1; transform: scale(1); }
+  45%  { offset-distance: 45%;  opacity: 0.15; transform: scale(0.75); }
+  55%  { offset-distance: 55%;  opacity: 0.15; transform: scale(0.75); }
+  100% { offset-distance: 100%; opacity: 1; transform: scale(1); }
+}
+@keyframes coinArc {
+  0%   { transform: translate(82px, 248px); opacity: 1; }
+  20%  { transform: translate(130px, 180px); opacity: 1; }
+  40%  { transform: translate(190px, 130px); opacity: 0.15; }
+  50%  { transform: translate(220px, 125px); opacity: 0.1; }
+  60%  { transform: translate(260px, 140px); opacity: 0.15; }
+  80%  { transform: translate(320px, 195px); opacity: 1; }
+  100% { transform: translate(358px, 248px); opacity: 1; }
+}
+@keyframes handAGive {
+  0%, 30%   { transform: translateY(0); }
+  50%       { transform: translateY(-12px); }
+  100%      { transform: translateY(0); }
+}
+@keyframes handBReceive {
+  0%, 60%   { transform: translateY(0); }
+  80%       { transform: translateY(-10px); }
+  100%      { transform: translateY(0); }
+}
+@keyframes veilPulse {
+  0%, 100% { opacity: 0.18; rx: 52; ry: 40; }
+  50%      { opacity: 0.4;  rx: 58; ry: 46; }
+}
+@keyframes coinGlow {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(240,201,122,0.4)); }
+  50%      { filter: drop-shadow(0 0 12px rgba(240,201,122,0.8)); }
+}
+
+.coin-travel {
+  animation: coinArc 3.6s cubic-bezier(0.4,0,0.2,1) infinite;
+  animation-fill-mode: both;
+  filter: drop-shadow(0 0 6px rgba(240,201,122,0.5));
+}
+.hand-a-anim { animation: handAGive 3.6s ease-in-out infinite; }
+.hand-b-anim { animation: handBReceive 3.6s ease-in-out infinite; }
+.veil-pulse { animation: veilPulse 3.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .coin-travel, .hand-a-anim, .hand-b-anim, .veil-pulse { animation: none; }
+}
+
+.btn-primary {
+  background: var(--accent); color: #fff; border: none;
+  font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 15px;
+  padding: 14px 32px; border-radius: 12px; cursor: pointer;
+  text-decoration: none; display: inline-block; transition: background .15s, transform .1s;
+}
+.btn-primary:hover { background: var(--accent-ink); transform: translateY(-1px); }
+.btn-ghost {
+  background: transparent; color: #8AA0BE;
+  border: 1px solid rgba(255,255,255,0.15);
+  font-family: 'Poppins', sans-serif; font-weight: 500; font-size: 15px;
+  padding: 14px 32px; border-radius: 12px; cursor: pointer;
+  text-decoration: none; display: inline-block; transition: border-color .15s, color .15s;
+}
+.btn-ghost:hover { border-color: rgba(255,255,255,0.35); color: #fff; }
+
+/* STATEMENT */
+.statement { padding: 88px 48px; text-align: center; background: var(--surface); }
+.statement h2 {
+  font-size: clamp(24px, 3.5vw, 38px); font-weight: 700;
+  max-width: 640px; margin: 0 auto 18px; line-height: 1.22;
+}
+.statement h2 em { color: var(--accent); font-style: normal; }
+.statement p { font-size: 17px; color: var(--ink-soft); max-width: 500px; margin: 0 auto; line-height: 1.7; }
+
+/* SECTION LABEL */
+.section-label { font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+.sec-head-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sec-head-bar .bar { width: 4px; height: 20px; border-radius: 2px; background: var(--accent); flex: none; }
+.sec-head-bar .section-label { margin-bottom: 0; }
+
+/* HOW IT WORKS */
+.how { padding: 80px 48px; background: var(--bg); }
+.how-inner { max-width: 1100px; margin: 0 auto; }
+.how h2 { font-family: 'Poppins', sans-serif; font-size: clamp(24px, 3vw, 34px); font-weight: 700; margin-bottom: 52px; max-width: 400px; }
+.how-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; margin-bottom: 80px;
+}
+.how-row.reverse { direction: rtl; }
+.how-row.reverse > * { direction: ltr; }
+.how-row:last-child { margin-bottom: 0; }
+.how-text {}
+.how-text .step-num {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--ink); color: var(--bg);
+  font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 13px;
+  display: flex; align-items: center; justify-content: center; margin-bottom: 16px;
+}
+.how-text h3 { font-size: 22px; font-weight: 600; margin-bottom: 12px; line-height: 1.25; }
+.how-text p { font-size: 15px; color: var(--ink-soft); line-height: 1.7; }
+
+/* UI FRAME */
+.ui-frame-wrap {
+  border-radius: 24px; overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  position: relative;
+}
+.ui-frame-bar {
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+  padding: 10px 16px; display: flex; align-items: center; gap: 6px;
+}
+.ui-frame-bar span {
+  width: 10px; height: 10px; border-radius: 50%;
+  display: inline-block;
+}
+.ui-frame-bar .dot-r { background: #FC685B; }
+.ui-frame-bar .dot-y { background: #FDBA2C; }
+.ui-frame-bar .dot-g { background: #33C74A; }
+.ui-frame-bar .url {
+  margin-left: 10px; font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--ink-faint);
+}
+.ui-frame-outer {
+  position: relative;
+  width: 100%;
+  height: 520px;
+  overflow: hidden;
+  border-radius: 0 0 22px 22px;
+}
+.ui-frame {
+  position: absolute;
+  top: 0; left: 0;
+  width: 1280px;
+  height: 1400px;
+  border: none;
+  pointer-events: none;
+  transform: scale(0.42);
+  transform-origin: top left;
+}
+.ui-frame-fade {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 80px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* PROPERTIES */
+.props { padding: 80px 48px; background: var(--surface); }
+.props-inner { max-width: 960px; margin: 0 auto; }
+.props h2 { font-size: clamp(24px, 3vw, 34px); font-weight: 700; margin-bottom: 40px; }
+.props-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+.prop {
+  display: flex; gap: 18px; align-items: flex-start;
+  padding: 24px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg);
+}
+.prop-icon {
+  flex: none; width: 40px; height: 40px; border-radius: 10px;
+  background: var(--ink); display: flex; align-items: center; justify-content: center;
+}
+.prop-icon svg { width: 19px; height: 19px; stroke: #F0C97A; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.prop h3 { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+.prop p { font-size: 13.5px; color: var(--ink-soft); line-height: 1.65; }
+
+/* HISTORY */
+.history { padding: 80px 48px; background: var(--navy); }
+.history-inner { max-width: 700px; margin: 0 auto; }
+.history .section-label { color: #F0C97A; }
+.history h2 { font-size: clamp(24px, 3vw, 34px); font-weight: 700; color: #fff; margin-bottom: 28px; line-height: 1.25; }
+.history-body { font-size: 16px; color: #8AA0BE; line-height: 1.8; }
+.history-body strong { color: #C8D8F0; font-weight: 500; }
+.history-body p { margin-bottom: 18px; }
+.history-body p:last-child { margin-bottom: 0; }
+
+/* WHO */
+.whom { padding: 80px 48px; background: var(--bg); }
+.whom-inner { max-width: 960px; margin: 0 auto; }
+.whom h2 { font-size: clamp(24px, 3vw, 34px); font-weight: 700; margin-bottom: 40px; }
+.whom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.whom-card { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 28px 24px; box-shadow: var(--shadow); }
+.whom-card .wc-tag {
+  display: inline-block; background: var(--accent-soft); color: var(--accent-ink);
+  font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 6px; margin-bottom: 14px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.whom-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; line-height: 1.3; }
+.whom-card p { font-size: 13.5px; color: var(--ink-soft); line-height: 1.65; }
+
+/* CTA */
+.cta-section { padding: 96px 48px; text-align: center; background: var(--surface); border-top: 1px solid var(--line); }
+.cta-section h2 { font-size: clamp(26px, 4vw, 44px); font-weight: 800; margin-bottom: 14px; line-height: 1.15; }
+.cta-section h2 em { color: var(--accent); font-style: normal; }
+.cta-section p { font-size: 17px; color: var(--ink-soft); margin: 0 auto 36px; max-width: 420px; line-height: 1.65; }
+.cta-form { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; max-width: 460px; margin: 0 auto; }
+.cta-form input {
+  flex: 1; min-width: 210px; padding: 13px 16px;
+  border: 1.5px solid var(--line-strong); border-radius: 11px;
+  font-size: 15px; color: var(--ink); background: var(--bg);
+  outline: none; transition: border-color .15s; font-family: 'Inter', sans-serif;
+}
+.cta-form input:focus { border-color: var(--accent); }
+.cta-form input::placeholder { color: var(--ink-faint); }
+.cta-note { font-size: 13px; color: var(--ink-faint); margin-top: 12px; }
+
+/* FOOTER */
+footer {
+  background: var(--navy); padding: 32px 48px;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+}
+.footer-brand { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 16px; color: #fff; }
+.footer-brand b { color: #F0C97A; }
+.footer-links { display: flex; gap: 24px; }
+.footer-links a { font-size: 13px; color: #4A6080; text-decoration: none; }
+.footer-links a:hover { color: #8AA0BE; }
+
+@media (max-width: 860px) {
+  nav { padding: 0 20px; }
+  .nav-links { display: none; }
+  .hero, .statement, .how, .props, .history, .whom, .cta-section { padding: 64px 20px; }
+  .hero-inner { grid-template-columns: 1fr; gap: 40px; }
+  .hero-right { height: 280px; }
+  .how-row, .how-row.reverse { grid-template-columns: 1fr; direction: ltr; gap: 32px; }
+  .props-grid { grid-template-columns: 1fr; }
+  .whom-grid { grid-template-columns: 1fr; }
+  footer { padding: 28px 20px; }
+  .ui-frame { height: 360px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-brand">
+    <div class="nav-mark">
+      <span></span><span></span><span></span><span style="background:var(--accent)"></span>
+    </div>
+    <span class="brand-name">digi<b>cash</b></span>
+  </div>
+  <div class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#who">Who it's for</a>
+
+  </div>
+  <a href="#access" class="nav-cta">Request access</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-left">
+      <h1>Money that moves like cash. <em>Not like data.</em></h1>
+      <p class="hero-sub">Banks issue digital money. Customers spend it privately. Nobody tracks where it goes. That is digicash.</p>
+      <div class="hero-actions">
+        <a href="#access" class="btn-primary">Request access</a>
+        <a href="#how" class="btn-ghost">How it works</a>
+      </div>
+      <div class="hero-stats">
+        <div class="hero-stat">
+          <div class="hs-val">Zero trail</div>
+          <div class="hs-label">Bank cannot link payer to payee</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hs-val">Once only</div>
+          <div class="hs-label">Every coin spends exactly once</div>
+        </div>
+      </div>
+    </div>
+    <div class="hero-right">
+      <div class="coin-scene">
+        <svg viewBox="0 0 440 380" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <radialGradient id="coinGrad" cx="40%" cy="35%" r="60%">
+              <stop offset="0%" stop-color="#F0C97A"/>
+              <stop offset="60%" stop-color="#A66E12"/>
+              <stop offset="100%" stop-color="#6E480B"/>
+            </radialGradient>
+            <radialGradient id="coinGrad2" cx="40%" cy="35%" r="60%">
+              <stop offset="0%" stop-color="#C8A855"/>
+              <stop offset="100%" stop-color="#5C3C08"/>
+            </radialGradient>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="3" result="blur"/>
+              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+
+          <!-- Background glow behind bank -->
+          <ellipse cx="220" cy="120" rx="60" ry="50" fill="rgba(166,110,18,0.06)"/>
+
+          <!-- HAND A (left, giving) -->
+          <g class="hand-a-anim">
+            <!-- Palm -->
+            <ellipse cx="82" cy="295" rx="38" ry="18" fill="#1a2a3a" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+            <!-- Fingers -->
+            <rect x="52" y="268" width="14" height="34" rx="7" fill="#1a2a3a" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <rect x="70" y="262" width="14" height="38" rx="7" fill="#1e2f40" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <rect x="88" y="260" width="14" height="38" rx="7" fill="#1e2f40" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <rect x="106" y="264" width="12" height="34" rx="6" fill="#1a2a3a" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <!-- Thumb -->
+            <ellipse cx="48" cy="290" rx="9" ry="14" fill="#1a2a3a" stroke="rgba(255,255,255,0.07)" stroke-width="1" transform="rotate(-20 48 290)"/>
+            <!-- Label -->
+            <text x="82" y="330" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#4A6080" letter-spacing="0.05em">Wallet A</text>
+          </g>
+
+          <!-- HAND B (right, receiving) -->
+          <g class="hand-b-anim">
+            <ellipse cx="358" cy="295" rx="38" ry="18" fill="#1a2a3a" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+            <rect x="334" y="268" width="14" height="34" rx="7" fill="#1a2a3a" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <rect x="352" y="262" width="14" height="38" rx="7" fill="#1e2f40" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <rect x="370" y="260" width="14" height="38" rx="7" fill="#1e2f40" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <rect x="388" y="264" width="12" height="34" rx="6" fill="#1a2a3a" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <ellipse cx="332" cy="290" rx="9" ry="14" fill="#1a2a3a" stroke="rgba(255,255,255,0.07)" stroke-width="1" transform="rotate(20 332 290)"/>
+            <text x="358" y="330" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#4A6080" letter-spacing="0.05em">Wallet B</text>
+          </g>
+
+          <!-- BANK silhouette (center top) - closed eyes, cannot see -->
+          <g transform="translate(185, 38)">
+            <!-- Building body -->
+            <rect x="0" y="30" width="70" height="55" rx="6" fill="#0F1B2D" stroke="rgba(240,201,122,0.2)" stroke-width="1"/>
+            <!-- Roof/pillars suggestion -->
+            <rect x="-8" y="24" width="86" height="12" rx="3" fill="#0F1B2D" stroke="rgba(240,201,122,0.2)" stroke-width="1"/>
+            <rect x="8" y="6" width="54" height="20" rx="3" fill="#0F1B2D" stroke="rgba(240,201,122,0.15)" stroke-width="1"/>
+            <!-- Windows (closed/dark = cannot see) -->
+            <rect x="10" y="42" width="18" height="14" rx="3" fill="#0a1520" stroke="rgba(240,201,122,0.15)" stroke-width="1"/>
+            <rect x="42" y="42" width="18" height="14" rx="3" fill="#0a1520" stroke="rgba(240,201,122,0.15)" stroke-width="1"/>
+            <!-- Closed eye lines on windows -->
+            <path d="M12 49 Q19 44 28 49" fill="none" stroke="rgba(240,201,122,0.5)" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M44 49 Q51 44 60 49" fill="none" stroke="rgba(240,201,122,0.5)" stroke-width="1.5" stroke-linecap="round"/>
+            <!-- Door -->
+            <rect x="26" y="60" width="18" height="25" rx="3" fill="#0a1520" stroke="rgba(240,201,122,0.1)" stroke-width="1"/>
+            <!-- Label -->
+            <text x="35" y="102" text-anchor="middle" font-family="Poppins,sans-serif" font-size="9" fill="#F0C97A" font-weight="600" letter-spacing="0.1em">BANK</text>
+            <text x="35" y="114" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="#4A6080">cannot see</text>
+          </g>
+
+          <!-- Blind veil / fog over bank -->
+          <ellipse class="veil-pulse" cx="220" cy="88" rx="52" ry="40" fill="none" stroke="rgba(240,201,122,0.18)" stroke-width="1" stroke-dasharray="4 3"/>
+
+          <!-- Arc path (visual only, coin travels along this) -->
+          <path d="M82 270 Q160 140 220 130 Q280 120 358 270" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+          <!-- MOVING COIN -->
+          <g class="coin-travel">
+            <!-- Coin shadow -->
+            <ellipse cx="0" cy="8" rx="18" ry="6" fill="rgba(0,0,0,0.3)"/>
+            <!-- Coin body -->
+            <circle cx="0" cy="0" r="22" fill="url(#coinGrad)" filter="url(#glow)"/>
+            <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>
+            <circle cx="0" cy="0" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
+            <!-- Coin face -->
+            <text x="0" y="-4" text-anchor="middle" font-family="Poppins,sans-serif" font-size="9" fill="rgba(255,255,255,0.9)" font-weight="700">64</text>
+            <text x="0" y="7" text-anchor="middle" font-family="Inter,sans-serif" font-size="6" fill="rgba(255,255,255,0.6)" letter-spacing="0.05em">CENTS</text>
+          </g>
+
+          <!-- Bottom caption -->
+          <text x="220" y="360" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#374151" letter-spacing="0.04em">coin changes hands · bank sees nothing</text>
+
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATEMENT -->
+<section class="statement">
+  <h2>Every digital payment today leaves a record. <em>digicash does not.</em></h2>
+  <p>Card networks, mobile wallets, bank transfers. All logged. All analyzed. digicash is different. Payments are private by design, not by policy.</p>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="how" id="how">
+  <div class="how-inner">
+    <div class="sec-head-bar"><span class="bar"></span><span class="section-label">How it works</span></div>
+    <h2>Three steps. Nothing for your customers to learn.</h2>
+
+    <div class="how-row">
+      <div class="how-text">
+        <div class="step-num">1</div>
+        <h3>Customer withdraws from their account</h3>
+        <p>The bank issues digital coins. It signs them without seeing which coins it gave to which customer. Privacy starts at issuance, before the first payment.</p>
+      </div>
+      <div class="ui-frame-wrap">
+        <div class="ui-frame-bar">
+          <span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span>
+          <span class="url">digicash — wallet</span>
+        </div>
+        <div class="ui-frame-outer">
+          <iframe src="digicash-wallet.html" class="ui-frame" scrolling="no" tabindex="-1"></iframe>
+          <div class="ui-frame-fade"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="how-row reverse">
+      <div class="how-text">
+        <div class="step-num">2</div>
+        <h3>Bank sees activity, not identities</h3>
+        <p>Withdrawals, deposits, rejections. Rates and totals. The bank operator monitors the system without ever seeing who paid whom. The unlinkability is not a setting. It is enforced by the cryptography.</p>
+      </div>
+      <div class="ui-frame-wrap">
+        <div class="ui-frame-bar">
+          <span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span>
+          <span class="url">digicash — bank operator</span>
+        </div>
+        <div class="ui-frame-outer">
+          <iframe src="digicash-bank-panel.html" class="ui-frame" scrolling="no" tabindex="-1"></iframe>
+          <div class="ui-frame-fade"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- PROPERTIES -->
+<section class="props">
+  <div class="props-inner">
+    <div class="sec-head-bar"><span class="bar"></span><span class="section-label">Guarantees</span></div>
+    <h2>Four things that cannot be broken.</h2>
+    <div class="props-grid">
+      <div class="prop">
+        <div class="prop-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div>
+          <h3>The bank cannot trace a payment</h3>
+          <p>The bank signs coins without seeing what it signs. At deposit, it has no way to connect the payment to the withdrawal. Not a setting. Enforced by the mathematics.</p>
+        </div>
+      </div>
+      <div class="prop">
+        <div class="prop-icon">
+          <svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9S3 16.97 3 12 7.03 3 12 3s9 4.03 9 9z"/></svg>
+        </div>
+        <div>
+          <h3>Coins cannot be forged</h3>
+          <p>Every coin carries a signature from the issuing bank. No valid signature means no value. Creating a fake coin is not possible without the bank's private key.</p>
+        </div>
+      </div>
+      <div class="prop">
+        <div class="prop-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div>
+          <h3>Spending a coin twice is caught</h3>
+          <p>The bank records every coin deposited. A second deposit of the same coin is rejected immediately, at any branch, at any participating bank.</p>
+        </div>
+      </div>
+      <div class="prop">
+        <div class="prop-icon">
+          <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div>
+          <h3>Regulators still have what they need</h3>
+          <p>digicash runs inside a licensed bank. The bank stays regulated and auditable. Privacy for customers does not mean invisibility for regulators.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHO -->
+<section class="whom" id="who">
+  <div class="whom-inner">
+    <div class="sec-head-bar"><span class="bar"></span><span class="section-label">Who it's for</span></div>
+    <h2>For institutions that take privacy seriously.</h2>
+    <div class="whom-grid">
+      <div class="whom-card">
+        <span class="wc-tag">Banks</span>
+        <h3>Licensed financial institutions</h3>
+        <p>Issue private digital cash as a product. Stay fully regulated. Give customers the privacy of physical cash without leaving the banking system.</p>
+      </div>
+      <div class="whom-card">
+        <span class="wc-tag">Fintech</span>
+        <h3>Payment infrastructure builders</h3>
+        <p>Embed private cash settlement into your platform. digicash handles the cryptography. You own the product.</p>
+      </div>
+      <div class="whom-card">
+        <span class="wc-tag">Enterprise</span>
+        <h3>Organizations moving value internally</h3>
+        <p>Move money between entities without creating a permanent record. Settlement without exposure.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section" id="access">
+  <h2>Your customers want <em>privacy.</em> Give it to them.</h2>
+  <p>We work with a small number of institutions at a time. Request access and we will follow up directly.</p>
+  <div class="cta-form">
+    <input type="email" placeholder="your@institution.com">
+    <a href="#" class="btn-primary" style="white-space:nowrap">Request access</a>
+  </div>
+  <p class="cta-note">No sales call required.</p>
+</section>
+
+<footer>
+  <span class="footer-brand">digi<b>cash</b></span>
+  <div class="footer-links">
+    <a href="#">Privacy</a>
+    <a href="#">Contact</a>
+  </div>
+</footer>
+
+</body>
+</html>
