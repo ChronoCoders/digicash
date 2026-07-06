@@ -226,3 +226,84 @@ fn spent_serials_survive_bank_restart() {
         "rejected replay must not credit the account again"
     );
 }
+
+#[test]
+fn tampered_coin_signature_is_rejected() {
+    let db = TempDir::new().expect("db tempdir");
+    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let store_a = TempDir::new().expect("store a");
+    let store_b = TempDir::new().expect("store b");
+    let wallet_a = open_wallet(bank.url(), store_a.path());
+    let wallet_b = open_wallet(bank.url(), store_b.path());
+    wallet_a.create_account("wallet-a", 500).expect("create wallet-a");
+    wallet_b.create_account("wallet-b", 0).expect("create wallet-b");
+
+    let mut coin = wallet_a
+        .withdraw(64)
+        .expect("withdraw")
+        .pop()
+        .expect("one coin");
+    coin.signature[0] ^= 0x01;
+
+    let client = BankClient::new(bank.url().to_string());
+    let resp = client
+        .deposit(&digicash_proto::DepositRequest {
+            coin,
+            account_id: "wallet-b".to_string(),
+            request_id: "tampered".to_string(),
+        })
+        .expect("deposit call");
+    assert_eq!(
+        resp.reason,
+        Some(digicash_proto::DepositRejection::InvalidSignature)
+    );
+    assert_eq!(client.balance("wallet-b").expect("balance b").balance_cents, 0);
+}
+
+#[test]
+fn withdraw_beyond_balance_is_rejected() {
+    let db = TempDir::new().expect("db tempdir");
+    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let store_a = TempDir::new().expect("store a");
+    let wallet_a = open_wallet(bank.url(), store_a.path());
+    wallet_a.create_account("wallet-a", 500).expect("create wallet-a");
+
+    // 1024 decomposes to a single 1024-cent coin, exceeding the 500-cent balance.
+    let result = wallet_a.withdraw(1024);
+    assert!(
+        matches!(result, Err(digicash_wallet::WalletError::Http { .. })),
+        "withdraw beyond balance must be rejected by the bank: {result:?}"
+    );
+    assert_eq!(
+        wallet_a.balance().expect("balance a").balance_cents,
+        500,
+        "a rejected withdraw must not debit the account"
+    );
+}
+
+#[test]
+fn unknown_denomination_is_rejected() {
+    let db = TempDir::new().expect("db tempdir");
+    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let store_a = TempDir::new().expect("store a");
+    let wallet_a = open_wallet(bank.url(), store_a.path());
+    wallet_a.create_account("wallet-a", 500).expect("create wallet-a");
+
+    // 100 cents is not a power of two, so the bank has no key for it.
+    let client = BankClient::new(bank.url().to_string());
+    let result = client.withdraw(&digicash_proto::WithdrawRequest {
+        account_id: "wallet-a".to_string(),
+        request_id: "unknown-denom".to_string(),
+        denomination_cents: 100,
+        blinded_message: vec![0u8; 8],
+    });
+    assert!(
+        matches!(result, Err(digicash_wallet::WalletError::Http { .. })),
+        "unknown denomination must be rejected: {result:?}"
+    );
+    assert_eq!(
+        wallet_a.balance().expect("balance a").balance_cents,
+        500,
+        "a rejected withdraw must not debit the account"
+    );
+}
