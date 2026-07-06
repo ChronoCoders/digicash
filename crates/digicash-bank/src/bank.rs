@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use digicash_core::{
-    ensure_supported_scheme, sign_blinded, BlindMessage, DenominationPublicKey, Signature,
-    SCHEME_ID_RSA_DETERMINISTIC,
+    ensure_supported_scheme, sign_blinded, verify, BlindMessage, DenominationPublicKey, Serial,
+    Signature, SCHEME_ID_RSA_DETERMINISTIC,
 };
 use digicash_proto::{
     BalanceResponse, DepositRejection, DepositRequest, DepositResponse, WithdrawRequest,
@@ -431,12 +431,9 @@ impl Bank {
         let Some(keypair) = self.keys.get(coin.denomination_cents, coin.scheme_id) else {
             return Ok(reject(DepositRejection::UnknownDenomination));
         };
+        let serial = Serial::from_bytes(coin.serial_number);
         let signature = Signature(coin.signature.clone());
-        if keypair
-            .pk
-            .verify(&signature, None, coin.serial_number)
-            .is_err()
-        {
+        if verify(&keypair.pk, &serial, &signature).is_err() {
             return Ok(reject(DepositRejection::InvalidSignature));
         }
         if self.balance(&req.account_id)?.is_none() {

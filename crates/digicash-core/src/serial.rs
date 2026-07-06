@@ -15,6 +15,12 @@ impl Serial {
         Ok(Self(bytes))
     }
 
+    /// Reconstruct a serial from its raw bytes, such as the serial carried on a deposited
+    /// coin, so it can be verified with [`crate::verify`].
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// The raw 32 bytes, as fed to the blind-signature scheme.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -34,5 +40,12 @@ mod tests {
             a.as_bytes() != b.as_bytes(),
             "two independently generated serials collided"
         );
+    }
+
+    #[test]
+    fn from_bytes_round_trips() {
+        let serial = Serial::generate().expect("OS CSPRNG available in test environment");
+        let rebuilt = Serial::from_bytes(*serial.as_bytes());
+        assert_eq!(serial.as_bytes(), rebuilt.as_bytes());
     }
 }
