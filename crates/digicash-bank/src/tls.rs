@@ -57,8 +57,13 @@ impl CertAuthority {
         };
         let ca_cert = ca_params()?.self_signed(&ca_key)?;
         // Publish the CA certificate to the key directory so wallets can be provisioned with
-        // it out-of-band to pin the bank. Rewritten each startup; stable under the same key.
-        fs::write(key_dir.join(CA_CERT_FILE), ca_cert.pem())?;
+        // it out-of-band to pin the bank. Rewritten each startup (the leaf bytes vary with the
+        // signature nonce even under the same key), so write it atomically via a
+        // process-unique temp file and rename: a concurrent reader sees a complete file, and
+        // any version validates because the CA key is stable.
+        let tmp = key_dir.join(format!("{CA_CERT_FILE}.{}.tmp", std::process::id()));
+        fs::write(&tmp, ca_cert.pem())?;
+        fs::rename(&tmp, key_dir.join(CA_CERT_FILE))?;
 
         let server_key = KeyPair::generate()?;
         let server_cert = server_params()?.signed_by(&server_key, &ca_cert, &ca_key)?;

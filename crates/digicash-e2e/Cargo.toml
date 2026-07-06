@@ -9,6 +9,13 @@ publish = false
 workspace = true
 
 [dev-dependencies]
+digicash-core = { workspace = true }
+digicash-bank = { workspace = true }
 digicash-proto = { workspace = true }
 digicash-wallet = { workspace = true }
+hex = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+serde_json = { workspace = true }
 tempfile = "3"
+ureq = { version = "2", features = ["json"] }

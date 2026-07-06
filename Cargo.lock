@@ -588,9 +588,16 @@ dependencies = [
 name = "digicash-e2e"
 version = "0.4.0"
 dependencies = [
+ "digicash-bank",
+ "digicash-core",
  "digicash-proto",
  "digicash-wallet",
+ "hex",
+ "rustls",
+ "rustls-pemfile",
+ "serde_json",
  "tempfile",
+ "ureq",
 ]
 
 [[package]]
