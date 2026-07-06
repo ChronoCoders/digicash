@@ -1,7 +1,13 @@
 use std::path::Path;
 
-use digicash_core::{sign_blinded, BlindMessage, DenominationPublicKey, SCHEME_ID_RSA_DETERMINISTIC};
-use digicash_proto::{BalanceResponse, WithdrawRequest, WithdrawResponse};
+use digicash_core::{
+    ensure_supported_scheme, sign_blinded, BlindMessage, DenominationPublicKey, Signature,
+    SCHEME_ID_RSA_DETERMINISTIC,
+};
+use digicash_proto::{
+    BalanceResponse, DepositRejection, DepositRequest, DepositResponse, WithdrawRequest,
+    WithdrawResponse,
+};
 use serde::{Deserialize, Serialize};
 use sled::transaction::{abort, TransactionError};
 use sled::Transactional;
@@ -12,6 +18,7 @@ use crate::keys::KeyStore;
 const ACCOUNTS_TREE: &str = "accounts";
 const SPENT_TREE: &str = "spent_serials";
 const WITHDRAWALS_TREE: &str = "withdrawals";
+const DEPOSITS_TREE: &str = "deposits";
 
 /// Persisted state of a withdrawal, keyed by `request_id`. Drives the crash-recoverable
 /// state machine (spec v0.3 section 6.1).
@@ -38,14 +45,35 @@ struct WithdrawalRecord {
     blind_signature: Option<Vec<u8>>,
 }
 
-/// The bank: a sled-backed account ledger, spent-serial store, and withdrawal state
-/// machine, plus an in-memory denomination key store loaded from a key directory at
-/// startup.
+/// A record of an accepted deposit, keyed by `request_id`, so a retry with the same
+/// `request_id` replays instead of being read as a double-spend, and a `request_id` reused
+/// for a different coin is caught.
+#[derive(Debug, Serialize, Deserialize)]
+struct DepositRecord {
+    scheme_id: u8,
+    denomination_cents: u64,
+    serial_number: [u8; 32],
+    account_id: String,
+}
+
+/// Outcome of the atomic deposit transaction. Rejections here are normal results carried
+/// back in [`DepositResponse`], not errors.
+enum DepositOutcome {
+    Accepted,
+    Replay,
+    DoubleSpend,
+    RequestIdReuse,
+}
+
+/// The bank: a sled-backed account ledger, spent-serial store, withdrawal state machine,
+/// and deposit idempotency index, plus an in-memory denomination key store loaded from a
+/// key directory at startup.
 pub struct Bank {
     db: sled::Db,
     accounts: sled::Tree,
     spent: sled::Tree,
     withdrawals: sled::Tree,
+    deposits: sled::Tree,
     keys: KeyStore,
 }
 
@@ -61,12 +89,14 @@ impl Bank {
         let accounts = db.open_tree(ACCOUNTS_TREE)?;
         let spent = db.open_tree(SPENT_TREE)?;
         let withdrawals = db.open_tree(WITHDRAWALS_TREE)?;
+        let deposits = db.open_tree(DEPOSITS_TREE)?;
         let keys = KeyStore::load_or_create(key_dir.as_ref(), denominations)?;
         let bank = Self {
             db,
             accounts,
             spent,
             withdrawals,
+            deposits,
             keys,
         };
         bank.recover_withdrawals()?;
@@ -385,6 +415,112 @@ impl Bank {
             None => Ok(None),
         }
     }
+
+    /// Deposit a coin, crediting `account_id`.
+    ///
+    /// Verifies the signature under the coin's `(denomination, scheme_id)` key, then
+    /// atomically checks the serial against the spent set and, if fresh, records it and
+    /// credits the account. A retry with the same `request_id` and coin replays; a
+    /// different `request_id` for an already-spent serial is a double-spend. Rejections are
+    /// returned in the response, not as errors.
+    pub fn deposit(&self, req: &DepositRequest) -> Result<DepositResponse, BankError> {
+        let coin = &req.coin;
+        if ensure_supported_scheme(coin.scheme_id).is_err() {
+            return Ok(reject(DepositRejection::UnknownScheme));
+        }
+        let Some(keypair) = self.keys.get(coin.denomination_cents, coin.scheme_id) else {
+            return Ok(reject(DepositRejection::UnknownDenomination));
+        };
+        let signature = Signature(coin.signature.clone());
+        if keypair
+            .pk
+            .verify(&signature, None, coin.serial_number)
+            .is_err()
+        {
+            return Ok(reject(DepositRejection::InvalidSignature));
+        }
+        if self.balance(&req.account_id)?.is_none() {
+            return Ok(reject(DepositRejection::UnknownAccount));
+        }
+        Ok(match self.commit_deposit(req)? {
+            DepositOutcome::Accepted | DepositOutcome::Replay => DepositResponse {
+                accepted: true,
+                reason: None,
+            },
+            DepositOutcome::DoubleSpend => reject(DepositRejection::DoubleSpend),
+            DepositOutcome::RequestIdReuse => reject(DepositRejection::RequestIdReuse),
+        })
+    }
+
+    /// Atomically apply a deposit: idempotency check by `request_id`, double-spend check by
+    /// serial, and on success record the serial and credit the account, all in one sled
+    /// transaction.
+    fn commit_deposit(&self, req: &DepositRequest) -> Result<DepositOutcome, BankError> {
+        let coin = &req.coin;
+        let request_id = req.request_id.as_str();
+        let account_id = req.account_id.as_str();
+        let denom = coin.denomination_cents;
+        let serial_k = spent_key(coin.scheme_id, denom, &coin.serial_number);
+        let record = DepositRecord {
+            scheme_id: coin.scheme_id,
+            denomination_cents: denom,
+            serial_number: coin.serial_number,
+            account_id: account_id.to_string(),
+        };
+        let record_bytes = serde_json::to_vec(&record).map_err(|e| BankError::MalformedRecord {
+            request_id: request_id.to_string(),
+            message: e.to_string(),
+        })?;
+
+        let outcome: Result<DepositOutcome, TransactionError<BankError>> =
+            (&self.spent, &self.deposits, &self.accounts).transaction(
+                |(spent, deposits, accounts)| {
+                    if let Some(existing) = deposits.get(request_id.as_bytes())? {
+                        let prior: DepositRecord = match serde_json::from_slice(&existing) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                return abort(BankError::MalformedRecord {
+                                    request_id: request_id.to_string(),
+                                    message: e.to_string(),
+                                })
+                            }
+                        };
+                        if prior.scheme_id == coin.scheme_id
+                            && prior.denomination_cents == denom
+                            && prior.serial_number == coin.serial_number
+                        {
+                            return Ok(DepositOutcome::Replay);
+                        }
+                        return Ok(DepositOutcome::RequestIdReuse);
+                    }
+                    if spent.get(&serial_k[..])?.is_some() {
+                        return Ok(DepositOutcome::DoubleSpend);
+                    }
+                    let Some(bal_bytes) = accounts.get(account_id.as_bytes())? else {
+                        return abort(BankError::AccountNotFound(account_id.to_string()));
+                    };
+                    let balance = match <[u8; 8]>::try_from(bal_bytes.as_ref()) {
+                        Ok(a) => u64::from_be_bytes(a),
+                        Err(_) => {
+                            return abort(BankError::MalformedBalance {
+                                account_id: account_id.to_string(),
+                                found: bal_bytes.len(),
+                            })
+                        }
+                    };
+                    let Some(credited) = balance.checked_add(denom) else {
+                        return abort(BankError::BalanceOverflow(account_id.to_string()));
+                    };
+                    accounts.insert(account_id.as_bytes(), &credited.to_be_bytes()[..])?;
+                    spent.insert(&serial_k[..], request_id.as_bytes())?;
+                    deposits.insert(request_id.as_bytes(), record_bytes.as_slice())?;
+                    Ok(DepositOutcome::Accepted)
+                },
+            );
+        let outcome = outcome.map_err(txn_err)?;
+        self.db.flush()?;
+        Ok(outcome)
+    }
 }
 
 /// Encode a spent-serial key as `scheme_id ‖ denomination_be ‖ serial` (1 + 8 + 32 bytes).
@@ -425,14 +561,21 @@ fn txn_err(e: TransactionError<BankError>) -> BankError {
     }
 }
 
+fn reject(reason: DepositRejection) -> DepositResponse {
+    DepositResponse {
+        accepted: false,
+        reason: Some(reason),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{spent_key, Bank, WithdrawState};
     use digicash_core::{blind, unblind, verify, BlindSignature, BlindingResult, DefaultRng, Serial};
-    use digicash_proto::WithdrawRequest;
+    use digicash_proto::{Coin, DepositRejection, DepositRequest, WithdrawRequest};
     use tempfile::TempDir;
 
-    const DENOMS: &[u64] = &[64, 128];
+    const DENOMS: &[u64] = &[64];
 
     fn open_bank(tmp: &TempDir) -> Bank {
         Bank::open(tmp.path().join("db"), tmp.path().join("keys"), DENOMS)
@@ -593,5 +736,133 @@ mod tests {
             Some(1_000 - 64),
             "completed withdrawal must stay debited"
         );
+    }
+
+    /// Withdraw and unblind a full coin, ready to deposit.
+    fn mint_coin(bank: &Bank, account: &str, request_id: &str, denom: u64) -> Coin {
+        let (req, serial, blinding) = valid_withdraw(bank, account, request_id, denom);
+        let resp = bank.withdraw(&req).expect("withdraw");
+        let pk = bank.denomination_public_key(denom, 0).expect("key");
+        let sig = unblind(pk, &BlindSignature(resp.blind_signature), &blinding, &serial)
+            .expect("unblind");
+        Coin {
+            scheme_id: 0,
+            denomination_cents: denom,
+            serial_number: *serial.as_bytes(),
+            signature: sig.0,
+        }
+    }
+
+    #[test]
+    fn deposit_accepts_a_valid_coin_and_credits_the_payee() {
+        let tmp = TempDir::new().expect("tempdir");
+        let bank = open_bank(&tmp);
+        bank.create_account("alice", 1_000).expect("alice");
+        bank.create_account("bob", 0).expect("bob");
+        let coin = mint_coin(&bank, "alice", "w1", 64);
+
+        let req = DepositRequest {
+            coin,
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+        let resp = bank.deposit(&req).expect("deposit");
+        assert!(resp.accepted && resp.reason.is_none());
+        assert_eq!(bank.balance("bob").expect("balance"), Some(64));
+    }
+
+    #[test]
+    fn deposit_replay_with_same_request_id_credits_once() {
+        let tmp = TempDir::new().expect("tempdir");
+        let bank = open_bank(&tmp);
+        bank.create_account("alice", 1_000).expect("alice");
+        bank.create_account("bob", 0).expect("bob");
+        let coin = mint_coin(&bank, "alice", "w1", 64);
+        let req = DepositRequest {
+            coin,
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+
+        let first = bank.deposit(&req).expect("first deposit");
+        let second = bank.deposit(&req).expect("replay deposit");
+        assert!(first.accepted);
+        assert!(second.accepted && second.reason.is_none(), "replay was not accepted");
+        assert_eq!(
+            bank.balance("bob").expect("balance"),
+            Some(64),
+            "replay credited twice"
+        );
+    }
+
+    #[test]
+    fn deposit_same_coin_different_request_id_is_double_spend() {
+        let tmp = TempDir::new().expect("tempdir");
+        let bank = open_bank(&tmp);
+        bank.create_account("alice", 1_000).expect("alice");
+        bank.create_account("bob", 0).expect("bob");
+        let coin = mint_coin(&bank, "alice", "w1", 64);
+
+        let first = DepositRequest {
+            coin: coin.clone(),
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+        let again = DepositRequest {
+            coin,
+            account_id: "bob".to_string(),
+            request_id: "d2".to_string(),
+        };
+        assert!(bank.deposit(&first).expect("first").accepted);
+        let resp = bank.deposit(&again).expect("second");
+        assert_eq!(resp.reason, Some(DepositRejection::DoubleSpend));
+        assert_eq!(
+            bank.balance("bob").expect("balance"),
+            Some(64),
+            "double-spend credited a second time"
+        );
+    }
+
+    #[test]
+    fn deposit_with_tampered_signature_is_rejected() {
+        let tmp = TempDir::new().expect("tempdir");
+        let bank = open_bank(&tmp);
+        bank.create_account("alice", 1_000).expect("alice");
+        bank.create_account("bob", 0).expect("bob");
+        let mut coin = mint_coin(&bank, "alice", "w1", 64);
+        coin.signature[0] ^= 0x01;
+
+        let req = DepositRequest {
+            coin,
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+        let resp = bank.deposit(&req).expect("deposit");
+        assert_eq!(resp.reason, Some(DepositRejection::InvalidSignature));
+        assert_eq!(bank.balance("bob").expect("balance"), Some(0));
+    }
+
+    #[test]
+    fn deposit_reuse_of_request_id_for_a_different_coin_is_rejected() {
+        let tmp = TempDir::new().expect("tempdir");
+        let bank = open_bank(&tmp);
+        bank.create_account("alice", 1_000).expect("alice");
+        bank.create_account("bob", 0).expect("bob");
+        let coin1 = mint_coin(&bank, "alice", "w1", 64);
+        let coin2 = mint_coin(&bank, "alice", "w2", 64);
+
+        let first = DepositRequest {
+            coin: coin1,
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+        let reuse = DepositRequest {
+            coin: coin2,
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+        assert!(bank.deposit(&first).expect("first").accepted);
+        let resp = bank.deposit(&reuse).expect("reuse");
+        assert_eq!(resp.reason, Some(DepositRejection::RequestIdReuse));
     }
 }
