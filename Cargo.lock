@@ -462,6 +462,11 @@ dependencies = [
 [[package]]
 name = "digicash-e2e"
 version = "0.3.0"
+dependencies = [
+ "digicash-proto",
+ "digicash-wallet",
+ "tempfile",
+]
 
 [[package]]
 name = "digicash-proto"
