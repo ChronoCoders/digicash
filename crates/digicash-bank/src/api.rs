@@ -244,8 +244,7 @@ impl From<BankError> for ApiError {
             BankError::AccountNotFound(_) => StatusCode::NOT_FOUND,
             BankError::InsufficientBalance { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             BankError::UnknownDenomination(_) => StatusCode::BAD_REQUEST,
-            BankError::Sled(_)
-            | BankError::Io(_)
+            BankError::Io(_)
             | BankError::Core(_)
             | BankError::Key { .. }
             | BankError::MalformedBalance { .. }

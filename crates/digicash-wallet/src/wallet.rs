@@ -273,7 +273,10 @@ mod tests {
 
     #[test]
     fn register_create_account_and_read_balance() {
-        let bank = spawn_armed_bank(&[]);
+        let Some(bank) = spawn_armed_bank(&[]) else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
         let store = TempDir::new().expect("store tempdir");
         let wallet = registered_wallet(&bank, &store, "alice", 500);
 
@@ -284,7 +287,10 @@ mod tests {
 
     #[test]
     fn operations_require_registration() {
-        let bank = spawn_armed_bank(&[]);
+        let Some(bank) = spawn_armed_bank(&[]) else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
         let store = TempDir::new().expect("store tempdir");
         let wallet = Wallet::open(bank.api_url, store.path().join("store")).expect("wallet open");
         assert!(matches!(wallet.balance(), Err(WalletError::NotRegistered)));
@@ -304,7 +310,10 @@ mod tests {
     fn signed_withdraw_decomposes_and_stores_verifiable_coins() {
         use digicash_core::{verify, Serial, Signature};
 
-        let bank = spawn_armed_bank(&[64, 512]);
+        let Some(bank) = spawn_armed_bank(&[64, 512]) else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
         let store = TempDir::new().expect("store tempdir");
         let wallet = registered_wallet(&bank, &store, "alice", 1000);
 
@@ -371,7 +380,10 @@ mod tests {
     fn spend_writes_bundle_and_removes_selected_coins() {
         use digicash_proto::Coin;
 
-        let bank = spawn_armed_bank(&[64, 512]);
+        let Some(bank) = spawn_armed_bank(&[64, 512]) else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
         let store_dir = TempDir::new().expect("store");
         let out_dir = TempDir::new().expect("out");
         let wallet = registered_wallet(&bank, &store_dir, "alice", 1000);
@@ -409,7 +421,10 @@ mod tests {
     fn deposit_accepts_then_rejects_replay() {
         use digicash_proto::DepositRejection;
 
-        let bank = spawn_armed_bank(&[64, 512]);
+        let Some(bank) = spawn_armed_bank(&[64, 512]) else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
         let payer_store = TempDir::new().expect("payer store");
         let payee_store = TempDir::new().expect("payee store");
         let out_dir = TempDir::new().expect("out");

@@ -670,7 +670,6 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "sled",
  "sqlx",
  "tempfile",
  "thiserror",
@@ -707,6 +706,7 @@ dependencies = [
  "rustls-pemfile",
  "serde_json",
  "tempfile",
+ "tokio",
  "ureq",
 ]
 

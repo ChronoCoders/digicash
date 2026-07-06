@@ -1,6 +1,7 @@
 use std::net::TcpListener;
 use std::sync::Arc;
 
+use digicash_bank::test_support::TestDatabase;
 use digicash_bank::{authenticated_router, enrollment_router, serve_tls, Bank, CertAuthority};
 use tempfile::TempDir;
 
@@ -15,31 +16,41 @@ pub(crate) struct ArmedBank {
 }
 
 /// Spawn a fully-armed bank (mTLS value endpoints + server-TLS enrollment + Ed25519 request
-/// authentication) on two ephemeral ports, backed by a fresh temp directory. Listeners are
-/// bound before the server thread starts, so connections queue in the backlog.
-pub(crate) fn spawn_armed_bank(denominations: &'static [u64]) -> ArmedBank {
+/// authentication) backed by a fresh Postgres test database, on two ephemeral ports.
+/// `None` if `DATABASE_URL` is unset, so the caller can skip.
+pub(crate) fn spawn_armed_bank(denominations: &'static [u64]) -> Option<ArmedBank> {
+    // Create the isolated test database (and run migrations) in a short-lived runtime.
+    let database_url = {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            TestDatabase::create()
+                .await
+                .expect("create test database")
+                .map(|db| db.url().to_string())
+        })?
+    };
+
     let tmp = TempDir::new().expect("tempdir");
-    let bank = Arc::new(
-        Bank::open(
-            tmp.path().join("bankdb"),
-            tmp.path().join("bankkeys"),
-            denominations,
-        )
-        .expect("bank open"),
-    );
     let ca = Arc::new(CertAuthority::load_or_create(&tmp.path().join("cakeys")).expect("ca"));
     let ca_cert_pem = ca.ca_cert_pem();
     let api_config = ca.server_config().expect("api config");
     let enroll_config = ca.enrollment_server_config().expect("enroll config");
-    let api_app = authenticated_router(bank.clone(), ca.clone());
-    let enroll_app = enrollment_router(bank, ca);
-
     let (api_listener, api_url) = bound_listener();
     let (enroll_listener, enroll_url) = bound_listener();
+    let key_dir = tmp.path().join("keys");
 
+    // Build the bank and serve inside the server thread's runtime, so its Postgres pool lives
+    // for the server's lifetime.
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         runtime.block_on(async move {
+            let bank = Arc::new(
+                Bank::connect(&database_url, &key_dir, denominations)
+                    .await
+                    .expect("bank connect"),
+            );
+            let api_app = authenticated_router(bank.clone(), ca.clone());
+            let enroll_app = enrollment_router(bank, ca);
             tokio::join!(
                 async {
                     serve_tls(api_listener, api_app, api_config)
@@ -55,12 +66,12 @@ pub(crate) fn spawn_armed_bank(denominations: &'static [u64]) -> ArmedBank {
         });
     });
 
-    ArmedBank {
+    Some(ArmedBank {
         api_url,
         enroll_url,
         ca_cert_pem,
         _tmp: tmp,
-    }
+    })
 }
 
 fn bound_listener() -> (TcpListener, String) {

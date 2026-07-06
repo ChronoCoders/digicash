@@ -3,10 +3,6 @@ use digicash_core::CoreError;
 /// Errors returned by bank operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BankError {
-    /// A sled storage operation failed.
-    #[error("storage error: {0}")]
-    Sled(#[from] sled::Error),
-
     /// A Postgres query or connection operation failed.
     #[error("database error: {0}")]
     Db(#[from] tokio_postgres::Error),

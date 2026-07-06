@@ -31,15 +31,15 @@ struct BankProcess {
 }
 
 impl BankProcess {
-    /// Spawn the bank binary on two free ports against `db_dir`/`key_dir` and block until both
-    /// listeners accept connections, then read the published CA certificate.
-    fn spawn(db_dir: &Path, key_dir: &Path) -> BankProcess {
+    /// Spawn the bank binary on two free ports against Postgres `database_url` and `key_dir`,
+    /// and block until both listeners accept connections, then read the published CA cert.
+    fn spawn(database_url: &str, key_dir: &Path) -> BankProcess {
         let api_addr = format!("127.0.0.1:{}", free_port());
         let enroll_addr = format!("127.0.0.1:{}", free_port());
         let child = Command::new(bank_binary())
             .env("DIGICASH_ADDR", &api_addr)
             .env("DIGICASH_ENROLL_ADDR", &enroll_addr)
-            .env("DIGICASH_DB", db_dir)
+            .env("DATABASE_URL", database_url)
             .env("DIGICASH_KEYS", key_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -122,13 +122,44 @@ fn bank_binary() -> PathBuf {
 fn shared_key_dir() -> &'static Path {
     static KEYS: OnceLock<PathBuf> = OnceLock::new();
     KEYS.get_or_init(|| {
-        let dir = std::env::temp_dir().join("digicash-e2e-shared-keys-v2");
+        let dir = std::env::temp_dir().join("digicash-e2e-shared-keys-v3");
         std::fs::create_dir_all(&dir).expect("create shared key dir");
-        let warmup_db = TempDir::new().expect("warmup db tempdir");
-        let _warm = BankProcess::spawn(warmup_db.path(), &dir);
+        // Reached only after a caller obtained a database URL, so DATABASE_URL is set.
+        let warmup_url = fresh_db_url().expect("DATABASE_URL for warmup");
+        let _warm = BankProcess::spawn(&warmup_url, &dir);
         dir
     })
     .as_path()
+}
+
+/// Create a fresh, migrated Postgres test database and return its URL, or `None` if
+/// `DATABASE_URL` is unset (tests skip). Uses the bank's own test-support helper.
+fn fresh_db_url() -> Option<String> {
+    std::env::var("DATABASE_URL").ok().filter(|u| !u.is_empty())?;
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime.block_on(async {
+        digicash_bank::test_support::TestDatabase::create()
+            .await
+            .expect("create test database")
+            .map(|db| db.url().to_string())
+    })
+}
+
+/// Skip the current test (with a message) unless `DATABASE_URL` is set, otherwise bind a fresh
+/// database URL.
+macro_rules! db_url_or_skip {
+    () => {
+        match fresh_db_url() {
+            Some(url) => url,
+            None => {
+                eprintln!(
+                    "skipping: set DATABASE_URL to a Postgres instance (e.g. \
+                     postgres://user:pass@127.0.0.1:5432/db) to run this test"
+                );
+                return;
+            }
+        }
+    };
 }
 
 /// Open a wallet, register `account` against the running bank (obtaining an mTLS client
@@ -144,8 +175,8 @@ fn registered_wallet(bank: &BankProcess, store_dir: &Path, account: &str, balanc
 
 #[test]
 fn full_flow_withdraw_spend_deposit_over_mtls() {
-    let db = TempDir::new().expect("db tempdir");
-    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let db_url = db_url_or_skip!();
+    let bank = BankProcess::spawn(&db_url, shared_key_dir());
     let store_a = TempDir::new().expect("store a");
     let store_b = TempDir::new().expect("store b");
     let bundle_dir = TempDir::new().expect("bundle dir");
@@ -175,14 +206,14 @@ fn full_flow_withdraw_spend_deposit_over_mtls() {
 
 #[test]
 fn spent_serials_survive_bank_restart() {
-    let db = TempDir::new().expect("db tempdir");
+    let db_url = db_url_or_skip!();
     let store_a = TempDir::new().expect("store a");
     let store_b = TempDir::new().expect("store b");
     let bundle_dir = TempDir::new().expect("bundle dir");
     let bundle = bundle_dir.path().join("bundle.json");
 
     {
-        let bank = BankProcess::spawn(db.path(), shared_key_dir());
+        let bank = BankProcess::spawn(&db_url, shared_key_dir());
         let wallet_a = registered_wallet(&bank, store_a.path(), "wallet-a", 1000);
         let wallet_b = registered_wallet(&bank, store_b.path(), "wallet-b", 0);
         wallet_a.withdraw(576).expect("withdraw");
@@ -194,8 +225,9 @@ fn spent_serials_survive_bank_restart() {
         // Block end: the bank process is killed; the wallet stores persist.
     }
 
-    // Restart against the same data directory: the spent serials (and identities) survive.
-    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    // Restart against the same Postgres database: spent serials, the withdraw state machine,
+    // identities, and the nonce store all survive the new process.
+    let bank = BankProcess::spawn(&db_url, shared_key_dir());
     let wallet_b = Wallet::open(bank.api_url.clone(), store_b.path()).expect("reopen wallet b");
     let replay = wallet_b.deposit(&bundle).expect("re-deposit after restart");
     assert!(
@@ -213,8 +245,8 @@ fn spent_serials_survive_bank_restart() {
 
 #[test]
 fn replay_tampered_and_stale_requests_are_rejected() {
-    let db = TempDir::new().expect("db tempdir");
-    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let db_url = db_url_or_skip!();
+    let bank = BankProcess::spawn(&db_url, shared_key_dir());
     let client = SignedClient::enroll(&bank, "adversary");
 
     let now = now_unix();

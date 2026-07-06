@@ -1,7 +1,6 @@
 //! digicash bank: a Postgres-backed account ledger, spent-serial store, withdraw state
-//! machine, and deposit protocol (production-spec v1.3 section 4), with per-denomination
-//! signing keys held on disk. The anti-replay nonce store is still sled-backed and moves to
-//! Postgres in a later unit.
+//! machine, deposit protocol, and anti-replay nonce store (production-spec v1.3 section 4),
+//! with per-denomination signing keys held on disk.
 //!
 //! Production-spec v1.2 section 2 authentication lives here: [`authenticated_router`] wraps
 //! every value-bearing endpoint in the Ed25519 request-signing middleware, served over mTLS

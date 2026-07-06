@@ -26,6 +26,6 @@ thiserror = { workspace = true }
 ureq = { version = "2", features = ["json"] }
 
 [dev-dependencies]
-digicash-bank = { workspace = true }
+digicash-bank = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "net"] }
