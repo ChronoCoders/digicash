@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db_path = std::env::var("DIGICASH_DB").unwrap_or_else(|_| "digicash-db".to_string());
     let key_dir = std::env::var("DIGICASH_KEYS").unwrap_or_else(|_| "digicash-keys".to_string());
-    let addr = std::env::var("DIGICASH_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let addr = std::env::var("DIGICASH_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
 
     let bank = Bank::open(&db_path, &key_dir, &DENOMINATIONS)?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
