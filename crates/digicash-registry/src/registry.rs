@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use deadpool_postgres::Pool;
 use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
-use digicash_proto::MemberInfo;
+use digicash_proto::{MemberInfo, SerialOutcome, SerialResponse, TranscriptEntry};
 
 use crate::db;
 use crate::error::RegistryError;
@@ -113,6 +113,67 @@ impl Registry {
         Ok(row.map(|r| r.get::<_, bool>(0)).unwrap_or(false))
     }
 
+    /// Submit a coin serial and transcript digest at deposit time to the shared spent-serial
+    /// store (production-spec v1.4 section 10). The transcript is always appended; the serial
+    /// is inserted under the unique constraint. Returns `Accepted` if the serial was fresh, or
+    /// `DoubleSpend` with every recorded transcript (both banks' digests) on a collision.
+    pub(crate) async fn submit_serial(
+        &self,
+        depositing_bank_id: &str,
+        denomination_cents: u64,
+        scheme_id: u8,
+        serial_hex: &str,
+        transcript: &str,
+        now: u64,
+    ) -> Result<SerialResponse, RegistryError> {
+        let denom = to_i64(denomination_cents, "denomination")?;
+        let scheme = i16::from(scheme_id);
+        let seen = to_i64(now, "timestamp")?;
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        tx.execute(
+            "INSERT INTO transcripts \
+             (denomination_cents, scheme_id, serial_hex, bank_id, transcript, seen_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&denom, &scheme, &serial_hex, &depositing_bank_id, &transcript, &seen],
+        )
+        .await?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO serials \
+                 (denomination_cents, scheme_id, serial_hex, first_bank_id, first_transcript, \
+                 first_seen_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+                &[&denom, &scheme, &serial_hex, &depositing_bank_id, &transcript, &seen],
+            )
+            .await?;
+        let (outcome, transcripts) = if inserted == 1 {
+            (SerialOutcome::Accepted, Vec::new())
+        } else {
+            let rows = tx
+                .query(
+                    "SELECT bank_id, transcript, seen_at FROM transcripts \
+                     WHERE denomination_cents = $1 AND scheme_id = $2 AND serial_hex = $3 \
+                     ORDER BY seen_at, id",
+                    &[&denom, &scheme, &serial_hex],
+                )
+                .await?;
+            let mut entries = Vec::new();
+            for row in rows {
+                entries.push(TranscriptEntry {
+                    bank_id: row.get(0),
+                    transcript: row.get(1),
+                    seen_at: to_u64(row.get::<_, i64>(2), "seen_at")?,
+                });
+            }
+            (SerialOutcome::DoubleSpend, entries)
+        };
+        tx.commit().await?;
+        Ok(SerialResponse {
+            outcome,
+            transcripts,
+        })
+    }
+
     /// Record `nonce` as seen at `now`, returning `true` if fresh and `false` on replay within
     /// `ttl_secs` (production-spec v1.4 section 2). Atomic via the primary key.
     pub(crate) async fn check_and_record_nonce(
@@ -172,4 +233,9 @@ pub(crate) fn now_unix() -> u64 {
 pub(crate) fn to_i64(value: u64, what: &str) -> Result<i64, RegistryError> {
     i64::try_from(value)
         .map_err(|_| RegistryError::ValueRange(format!("{what} {value} exceeds the i64 range")))
+}
+
+pub(crate) fn to_u64(value: i64, what: &str) -> Result<u64, RegistryError> {
+    u64::try_from(value)
+        .map_err(|_| RegistryError::ValueRange(format!("{what} is negative: {value}")))
 }

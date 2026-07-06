@@ -6,12 +6,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
-use digicash_proto::{MembersResponse, RegisterMemberRequest};
+use digicash_proto::{MembersResponse, RegisterMemberRequest, SerialResponse, SerialSubmission};
 use serde::Serialize;
 
 use crate::auth::{verify_signed_request, AuthenticatedBank};
 use crate::error::RegistryError;
-use crate::registry::Registry;
+use crate::registry::{now_unix, Registry};
 
 /// Build the registry's HTTP router (production-spec v1.4 section 10).
 ///
@@ -22,6 +22,7 @@ use crate::registry::Registry;
 pub fn router(registry: Arc<Registry>) -> Router {
     let protected = Router::new()
         .route("/members", post(register_member).get(list_members))
+        .route("/serials", post(post_serial))
         .route_layer(axum::middleware::from_fn_with_state(
             registry.clone(),
             verify_signed_request,
@@ -58,6 +59,24 @@ async fn list_members(
     Ok(Json(MembersResponse {
         members: registry.list_members().await?,
     }))
+}
+
+async fn post_serial(
+    State(registry): State<Arc<Registry>>,
+    Extension(auth): Extension<AuthenticatedBank>,
+    Json(req): Json<SerialSubmission>,
+) -> Result<Json<SerialResponse>, ApiError> {
+    let response = registry
+        .submit_serial(
+            &auth.0,
+            req.denomination_cents,
+            req.scheme_id,
+            &req.serial_hex,
+            &req.transcript,
+            now_unix(),
+        )
+        .await?;
+    Ok(Json(response))
 }
 
 /// Reject a request whose authenticated caller is not the governance admin.
@@ -127,8 +146,8 @@ mod tests {
     use axum::response::Response;
     use digicash_core::{canonical_payload, IdentityKeypair};
     use digicash_proto::{
-        MembersResponse, RegisterMemberRequest, HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE,
-        HEADER_TIMESTAMP,
+        MembersResponse, RegisterMemberRequest, SerialOutcome, SerialResponse, SerialSubmission,
+        HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP,
     };
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -234,6 +253,71 @@ mod tests {
             .await
             .expect("send");
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn serial_accepted_replayed_and_cross_bank_double_spend() {
+        let Some(db) = TestDatabase::create().await.expect("test db") else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
+        let registry = Registry::connect(db.url()).await.expect("registry");
+        let bank_a = IdentityKeypair::generate().expect("a");
+        let bank_b = IdentityKeypair::generate().expect("b");
+        registry.register_member("bank-a", &bank_a.public_key(), false).await.expect("reg a");
+        registry.register_member("bank-b", &bank_b.public_key(), false).await.expect("reg b");
+        let app = router(Arc::new(registry));
+
+        let body = |serial: &str, transcript: &str| {
+            serde_json::to_vec(&SerialSubmission {
+                issuing_bank_id: "bank-a".to_string(),
+                denomination_cents: 64,
+                scheme_id: 0,
+                serial_hex: serial.to_string(),
+                transcript: transcript.to_string(),
+            })
+            .expect("serialize")
+        };
+
+        // bank-b deposits serial aa (issued by bank-a): accepted, no transcripts returned.
+        let resp = app
+            .clone()
+            .oneshot(signed(&bank_b, "bank-b", "POST", "/serials", &body("aa", "t-b1"), "n1"))
+            .await
+            .expect("submit");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let accepted: SerialResponse = json_body(resp).await;
+        assert_eq!(accepted.outcome, SerialOutcome::Accepted);
+        assert!(accepted.transcripts.is_empty());
+
+        // bank-b replays aa: double-spend, both of bank-b's transcripts retained.
+        let resp = app
+            .clone()
+            .oneshot(signed(&bank_b, "bank-b", "POST", "/serials", &body("aa", "t-b2"), "n2"))
+            .await
+            .expect("replay");
+        let replay: SerialResponse = json_body(resp).await;
+        assert_eq!(replay.outcome, SerialOutcome::DoubleSpend);
+        assert_eq!(replay.transcripts.len(), 2);
+
+        // Fresh serial bb: bank-b accepts, then bank-a double-spends it across banks.
+        let resp = app
+            .clone()
+            .oneshot(signed(&bank_b, "bank-b", "POST", "/serials", &body("bb", "t-b3"), "n3"))
+            .await
+            .expect("bb accept");
+        assert_eq!(json_body::<SerialResponse>(resp).await.outcome, SerialOutcome::Accepted);
+        let resp = app
+            .oneshot(signed(&bank_a, "bank-a", "POST", "/serials", &body("bb", "t-a1"), "n4"))
+            .await
+            .expect("bb cross-bank");
+        let cross: SerialResponse = json_body(resp).await;
+        assert_eq!(cross.outcome, SerialOutcome::DoubleSpend);
+        let banks: Vec<&str> = cross.transcripts.iter().map(|t| t.bank_id.as_str()).collect();
+        assert!(
+            banks.contains(&"bank-b") && banks.contains(&"bank-a"),
+            "cross-bank collision must retain both banks' transcripts: {banks:?}"
+        );
     }
 
     #[tokio::test]
