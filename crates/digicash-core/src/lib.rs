@@ -11,7 +11,13 @@
 //! coin verification live in `digicash-proto` and the bank (Phase 2), not here.
 
 mod error;
+mod scheme;
 mod serial;
 
+pub use blind_rsa_signatures::DefaultRng;
 pub use error::CoreError;
+pub use scheme::{
+    generate_keypair, DenominationKeypair, DenominationPublicKey, DenominationSecretKey,
+    MODULUS_BITS,
+};
 pub use serial::Serial;
