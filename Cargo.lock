@@ -460,6 +460,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "digicash-e2e"
+version = "0.3.0"
+
+[[package]]
 name = "digicash-proto"
 version = "0.3.0"
 dependencies = [

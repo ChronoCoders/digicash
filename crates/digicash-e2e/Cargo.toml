@@ -1,0 +1,9 @@
+[package]
+name = "digicash-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

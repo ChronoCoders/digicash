@@ -5,6 +5,7 @@ members = [
     "crates/digicash-proto",
     "crates/digicash-bank",
     "crates/digicash-wallet",
+    "crates/digicash-e2e",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ warnings = "deny"
 digicash-core = { path = "crates/digicash-core" }
 digicash-proto = { path = "crates/digicash-proto" }
 digicash-bank = { path = "crates/digicash-bank" }
+digicash-wallet = { path = "crates/digicash-wallet" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
