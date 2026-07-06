@@ -138,3 +138,45 @@ fn two_accounts_created_with_expected_balances() {
     assert_eq!(client.balance("wallet-a").expect("get a").balance_cents, 1000);
     assert_eq!(client.balance("wallet-b").expect("get b").balance_cents, 0);
 }
+
+#[test]
+fn full_flow_withdraw_spend_deposit() {
+    let db = TempDir::new().expect("db tempdir");
+    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let store_a = TempDir::new().expect("store a");
+    let store_b = TempDir::new().expect("store b");
+    let bundle_dir = TempDir::new().expect("bundle dir");
+
+    let wallet_a = open_wallet(bank.url(), store_a.path());
+    let wallet_b = open_wallet(bank.url(), store_b.path());
+    wallet_a.create_account("wallet-a", 1000).expect("create wallet-a");
+    wallet_b.create_account("wallet-b", 0).expect("create wallet-b");
+
+    // A withdraws 576, which must decompose to 512 + 64.
+    let coins = wallet_a.withdraw(576).expect("withdraw");
+    let mut denoms: Vec<u64> = coins.iter().map(|c| c.denomination_cents).collect();
+    denoms.sort_unstable();
+    assert_eq!(denoms, vec![64, 512], "576 must decompose to 512 + 64");
+
+    // A spends 576 to a bundle file, out of band (no bank contact).
+    let bundle = bundle_dir.path().join("bundle.json");
+    wallet_a.spend(576, &bundle).expect("spend");
+
+    // B deposits the received bundle without ever sharing A's store.
+    let outcomes = wallet_b.deposit(&bundle).expect("deposit");
+    assert_eq!(outcomes.len(), 2);
+    assert!(
+        outcomes.iter().all(|o| o.accepted),
+        "every coin should be accepted: {outcomes:?}"
+    );
+
+    assert_eq!(
+        wallet_a.balance().expect("balance a").balance_cents,
+        1000 - 576
+    );
+    assert_eq!(wallet_b.balance().expect("balance b").balance_cents, 576);
+
+    let client = BankClient::new(bank.url().to_string());
+    assert_eq!(client.balance("wallet-a").expect("get a").balance_cents, 424);
+    assert_eq!(client.balance("wallet-b").expect("get b").balance_cents, 576);
+}
