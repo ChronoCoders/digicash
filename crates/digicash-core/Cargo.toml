@@ -3,6 +3,9 @@ name = "digicash-core"
 version = "0.1.1"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Cryptographic primitives for the digicash e-cash prototype: RFC 9474 RSA blind signatures over coin serials. Experimental and unaudited."
 
 [lints]
 workspace = true

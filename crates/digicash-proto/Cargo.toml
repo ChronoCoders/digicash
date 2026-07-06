@@ -3,6 +3,9 @@ name = "digicash-proto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Wire types for the digicash e-cash prototype's bank/wallet protocol. Experimental and unaudited."
 
 [lints.rust]
 warnings = { level = "deny", priority = -1 }

@@ -3,6 +3,9 @@ name = "digicash-wallet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Wallet client and CLI for the digicash e-cash prototype: withdraw, spend to a bundle, and deposit. Experimental and unaudited."
 
 [lints.rust]
 warnings = { level = "deny", priority = -1 }

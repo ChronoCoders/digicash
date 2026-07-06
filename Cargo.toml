@@ -11,16 +11,17 @@ members = [
 [workspace.package]
 version = "0.4.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "MIT"
+repository = "https://github.com/ChronoCoders/digicash"
 
 [workspace.lints.rust]
 warnings = "deny"
 
 [workspace.dependencies]
-digicash-core = { path = "crates/digicash-core" }
-digicash-proto = { path = "crates/digicash-proto" }
-digicash-bank = { path = "crates/digicash-bank" }
-digicash-wallet = { path = "crates/digicash-wallet" }
+digicash-core = { path = "crates/digicash-core", version = "0.1.1" }
+digicash-proto = { path = "crates/digicash-proto", version = "0.4.0" }
+digicash-bank = { path = "crates/digicash-bank", version = "0.4.0" }
+digicash-wallet = { path = "crates/digicash-wallet", version = "0.4.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

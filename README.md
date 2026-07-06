@@ -3,7 +3,7 @@
 **Privacy preserving digital cash.**
 
 ![status](https://img.shields.io/badge/status-experimental-orange)
-![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
+![license](https://img.shields.io/badge/license-MIT-blue)
 ![rust](https://img.shields.io/badge/rust-2021-black)
 
 A Rust implementation of Chaumian blind-signature e-cash: digital bearer coins that a bank
@@ -117,5 +117,4 @@ negative checks (wrong key, tampered signature, swapped serial).
 
 ## License
 
-Licensed under either of the Apache License, Version 2.0 or the MIT license, at your
-option.
+MIT License - Copyright (c) 2026 Altug Tatlisu (ChronoCoders). See [LICENSE-MIT](LICENSE-MIT).

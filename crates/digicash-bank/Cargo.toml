@@ -3,6 +3,9 @@ name = "digicash-bank"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Bank server for the digicash e-cash prototype: account ledger, denomination keys, spent-serial store, and the withdraw/deposit protocol. Experimental and unaudited."
 
 [lints.rust]
 warnings = { level = "deny", priority = -1 }
