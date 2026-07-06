@@ -40,6 +40,13 @@ impl KeyStore {
     pub(crate) fn get(&self, denom: u64, scheme: u8) -> Option<&DenominationKeypair> {
         self.keys.get(&(denom, scheme))
     }
+
+    /// Every `(denomination_cents, scheme_id, public_key)`, in ascending key order.
+    pub(crate) fn public_keys(
+        &self,
+    ) -> impl Iterator<Item = (u64, u8, &digicash_core::DenominationPublicKey)> + '_ {
+        self.keys.iter().map(|(&(denom, scheme), kp)| (denom, scheme, &kp.pk))
+    }
 }
 
 fn key_path(dir: &Path, denom: u64, scheme: u8) -> PathBuf {

@@ -5,8 +5,8 @@ use digicash_core::{
     Signature, SCHEME_ID_RSA_DETERMINISTIC,
 };
 use digicash_proto::{
-    BalanceResponse, DepositRejection, DepositRequest, DepositResponse, WithdrawRequest,
-    WithdrawResponse,
+    BalanceResponse, DenominationKey, DepositRejection, DepositRequest, DepositResponse,
+    WithdrawRequest, WithdrawResponse,
 };
 use serde::{Deserialize, Serialize};
 use sled::transaction::{abort, TransactionError};
@@ -163,6 +163,25 @@ impl Bank {
         scheme: u8,
     ) -> Option<&DenominationPublicKey> {
         self.keys.get(denomination_cents, scheme).map(|kp| &kp.pk)
+    }
+
+    /// The bank's denomination public keys as SubjectPublicKeyInfo DER, for publication so
+    /// wallets can blind, unblind, and verify. In ascending `(denomination, scheme)` order.
+    pub fn published_keys(&self) -> Result<Vec<DenominationKey>, BankError> {
+        let mut out = Vec::new();
+        for (denom, scheme, pk) in self.keys.public_keys() {
+            let public_key_spki = pk.to_spki().map_err(|e| BankError::Key {
+                denom,
+                scheme,
+                message: format!("encode SPKI: {e}"),
+            })?;
+            out.push(DenominationKey {
+                denomination_cents: denom,
+                scheme_id: scheme,
+                public_key_spki,
+            });
+        }
+        Ok(out)
     }
 
     /// Withdraw one coin of `denomination_cents` (scheme 0).
@@ -568,7 +587,10 @@ fn reject(reason: DepositRejection) -> DepositResponse {
 #[cfg(test)]
 mod tests {
     use super::{spent_key, Bank, WithdrawState};
-    use digicash_core::{blind, unblind, verify, BlindSignature, BlindingResult, DefaultRng, Serial};
+    use digicash_core::{
+        blind, unblind, verify, BlindSignature, BlindingResult, DefaultRng, DenominationPublicKey,
+        Serial,
+    };
     use digicash_proto::{Coin, DepositRejection, DepositRequest, WithdrawRequest};
     use tempfile::TempDir;
 
@@ -637,6 +659,27 @@ mod tests {
             bank.balance("unknown").expect("balance of missing account"),
             None
         );
+    }
+
+    #[test]
+    fn published_keys_round_trip_via_spki() {
+        let tmp = TempDir::new().expect("tempdir");
+        let bank = Bank::open(tmp.path().join("db"), tmp.path().join("keys"), &[64, 512])
+            .expect("bank should open");
+        let published = bank.published_keys().expect("published keys");
+        assert_eq!(published.len(), 2);
+        for key in &published {
+            let parsed =
+                DenominationPublicKey::from_spki(&key.public_key_spki).expect("parse spki");
+            let expected = bank
+                .denomination_public_key(key.denomination_cents, key.scheme_id)
+                .expect("key present");
+            assert_eq!(
+                parsed.to_der().expect("der"),
+                expected.to_der().expect("der"),
+                "published SPKI did not round-trip to the bank's key"
+            );
+        }
     }
 
     #[test]

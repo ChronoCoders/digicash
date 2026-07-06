@@ -6,8 +6,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use digicash_proto::{
-    BalanceResponse, CreateAccountRequest, DepositRequest, DepositResponse, ErrorResponse,
-    WithdrawRequest, WithdrawResponse,
+    BalanceResponse, CreateAccountRequest, DenominationsResponse, DepositRequest, DepositResponse,
+    ErrorResponse, WithdrawRequest, WithdrawResponse,
 };
 
 use crate::bank::Bank;
@@ -18,9 +18,18 @@ pub fn router(bank: Arc<Bank>) -> Router {
     Router::new()
         .route("/accounts", post(create_account))
         .route("/accounts/{id}/balance", get(get_balance))
+        .route("/denominations", get(denominations))
         .route("/withdraw", post(withdraw))
         .route("/deposit", post(deposit))
         .with_state(bank)
+}
+
+async fn denominations(
+    State(bank): State<Arc<Bank>>,
+) -> Result<Json<DenominationsResponse>, ApiError> {
+    Ok(Json(DenominationsResponse {
+        denominations: bank.published_keys()?,
+    }))
 }
 
 async fn create_account(

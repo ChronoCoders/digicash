@@ -10,8 +10,9 @@ mod messages;
 
 pub use coin::Coin;
 pub use messages::{
-    BalanceResponse, CreateAccountRequest, DepositRejection, DepositRequest, DepositResponse,
-    ErrorResponse, WithdrawRequest, WithdrawResponse,
+    BalanceResponse, CreateAccountRequest, DenominationKey, DenominationsResponse,
+    DepositRejection, DepositRequest, DepositResponse, ErrorResponse, WithdrawRequest,
+    WithdrawResponse,
 };
 
 /// The coin denominations, in integer cents: powers of two from 1 to 8192 (spec v0.3
@@ -115,5 +116,23 @@ mod tests {
             assert_eq!(denom, 1u64 << i, "denomination at index {i} is not 2^{i}");
         }
         assert_eq!(DENOMINATIONS[DENOMINATIONS.len() - 1], 8192);
+    }
+
+    #[test]
+    fn denominations_response_roundtrip() {
+        roundtrip(DenominationsResponse {
+            denominations: vec![
+                DenominationKey {
+                    denomination_cents: 64,
+                    scheme_id: 0,
+                    public_key_spki: vec![48, 130, 1, 34, 5, 0],
+                },
+                DenominationKey {
+                    denomination_cents: 512,
+                    scheme_id: 0,
+                    public_key_spki: vec![],
+                },
+            ],
+        });
     }
 }

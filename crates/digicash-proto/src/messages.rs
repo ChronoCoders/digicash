@@ -74,3 +74,18 @@ pub struct BalanceResponse {
 pub struct ErrorResponse {
     pub error: String,
 }
+
+/// One denomination's public key, as SubjectPublicKeyInfo DER. Published so wallets can
+/// blind, unblind, and verify without ever seeing a private key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DenominationKey {
+    pub denomination_cents: u64,
+    pub scheme_id: u8,
+    pub public_key_spki: Vec<u8>,
+}
+
+/// Response of `GET /denominations`: the bank's published denomination public keys.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DenominationsResponse {
+    pub denominations: Vec<DenominationKey>,
+}
