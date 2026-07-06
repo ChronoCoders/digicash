@@ -1,3 +1,5 @@
+//! The digicash bank server binary: open the bank state and serve the HTTP API.
+
 use std::sync::Arc;
 
 use digicash_bank::{router, Bank, DENOMINATIONS};

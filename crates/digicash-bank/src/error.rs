@@ -20,14 +20,22 @@ pub enum BankError {
     /// into the bank's public error surface.
     #[error("denomination key error for denomination {denom} scheme {scheme}: {message}")]
     Key {
+        /// The denomination whose key failed.
         denom: u64,
+        /// The scheme id of the key.
         scheme: u8,
+        /// The underlying `blind-rsa-signatures` error, as text.
         message: String,
     },
 
     /// An account balance record was not the expected 8 bytes.
     #[error("corrupt balance record for account {account_id}: expected 8 bytes, found {found}")]
-    MalformedBalance { account_id: String, found: usize },
+    MalformedBalance {
+        /// The account with the corrupt balance record.
+        account_id: String,
+        /// The record length that was found, in bytes.
+        found: usize,
+    },
 
     /// Account creation was requested for an id that already exists.
     #[error("account {0} already exists")]
@@ -40,8 +48,11 @@ pub enum BankError {
     /// A withdrawal asked for more than the account holds.
     #[error("account {account_id} has {balance} cents, cannot withdraw {requested}")]
     InsufficientBalance {
+        /// The account that was short.
         account_id: String,
+        /// The available balance, in cents.
         balance: u64,
+        /// The amount requested, in cents.
         requested: u64,
     },
 
@@ -51,11 +62,21 @@ pub enum BankError {
 
     /// A persisted withdrawal record could not be decoded or was internally inconsistent.
     #[error("withdrawal record for {request_id} is corrupt: {message}")]
-    MalformedRecord { request_id: String, message: String },
+    MalformedRecord {
+        /// The withdrawal whose record could not be decoded.
+        request_id: String,
+        /// The decode error, as text.
+        message: String,
+    },
 
     /// Signing failed after the debit; the debit was compensated before returning.
     #[error("withdrawal {request_id} failed and was rolled back: {message}")]
-    WithdrawFailed { request_id: String, message: String },
+    WithdrawFailed {
+        /// The withdrawal that failed and was rolled back.
+        request_id: String,
+        /// The signing error, as text.
+        message: String,
+    },
 
     /// A retry of a `request_id` whose withdrawal previously failed and was rolled back.
     #[error("withdrawal {0} previously failed and was rolled back; use a new request_id")]
