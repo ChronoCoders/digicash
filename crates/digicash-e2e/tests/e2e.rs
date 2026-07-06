@@ -180,3 +180,49 @@ fn full_flow_withdraw_spend_deposit() {
     assert_eq!(client.balance("wallet-a").expect("get a").balance_cents, 424);
     assert_eq!(client.balance("wallet-b").expect("get b").balance_cents, 576);
 }
+
+#[test]
+fn spent_serials_survive_bank_restart() {
+    let db = TempDir::new().expect("db tempdir");
+    let store_a = TempDir::new().expect("store a");
+    let store_b = TempDir::new().expect("store b");
+    let bundle_dir = TempDir::new().expect("bundle dir");
+    let bundle = bundle_dir.path().join("bundle.json");
+
+    // Initial flow: A withdraws, spends to a bundle, B deposits it.
+    {
+        let bank = BankProcess::spawn(db.path(), shared_key_dir());
+        let wallet_a = open_wallet(bank.url(), store_a.path());
+        let wallet_b = open_wallet(bank.url(), store_b.path());
+        wallet_a.create_account("wallet-a", 1000).expect("create wallet-a");
+        wallet_b.create_account("wallet-b", 0).expect("create wallet-b");
+        wallet_a.withdraw(576).expect("withdraw");
+        wallet_a.spend(576, &bundle).expect("spend");
+        let outcomes = wallet_b.deposit(&bundle).expect("deposit");
+        assert!(
+            outcomes.iter().all(|o| o.accepted),
+            "initial deposit must be accepted"
+        );
+        assert_eq!(wallet_b.balance().expect("balance b").balance_cents, 576);
+        // Block end: the bank process is killed and the wallet stores are released.
+    }
+
+    // Restart the bank as a new process against the same data directory.
+    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let wallet_b = open_wallet(bank.url(), store_b.path());
+
+    // spent_serials survived the restart: the same bundle is a double-spend on every coin.
+    let replay = wallet_b.deposit(&bundle).expect("re-deposit after restart");
+    assert_eq!(replay.len(), 2);
+    assert!(
+        replay
+            .iter()
+            .all(|o| o.reason == Some(digicash_proto::DepositRejection::DoubleSpend)),
+        "every coin must be rejected as a double-spend after restart: {replay:?}"
+    );
+    assert_eq!(
+        wallet_b.balance().expect("balance b after replay").balance_cents,
+        576,
+        "rejected replay must not credit the account again"
+    );
+}
