@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/digicash-core", "crates/digicash-proto", "crates/digicash-bank"]
+members = [
+    "crates/digicash-core",
+    "crates/digicash-proto",
+    "crates/digicash-bank",
+    "crates/digicash-wallet",
+]
 
 [workspace.package]
 version = "0.2.2"
