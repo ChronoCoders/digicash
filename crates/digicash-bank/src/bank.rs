@@ -106,13 +106,65 @@ impl Bank {
         let nonce_db = sled::open(key_dir.join(NONCE_DB_DIR))?;
         let nonces = nonce_db.open_tree(NONCES_TREE)?;
         let keys = KeyStore::load_or_create(key_dir, denominations)?;
-        Ok(Self {
+        let bank = Self {
             pool,
             nonces,
             nonce_db,
             nonce_ops: AtomicU64::new(0),
             keys,
-        })
+        };
+        bank.recover_withdrawals().await?;
+        Ok(bank)
+    }
+
+    /// Drive every non-terminal withdrawal forward at startup (production-spec v1.3 section
+    /// 4.1): sign each `pending` one over its persisted blinded message (or compensate the
+    /// debit if signing fails), and complete each `signed` one. A `pending` withdraw is never
+    /// left stranded.
+    async fn recover_withdrawals(&self) -> Result<(), BankError> {
+        let client = self.pool.get().await?;
+        let rows = client
+            .query(
+                "SELECT request_id, state, account_id, denomination_cents, \
+                 blinded_message, blind_signature \
+                 FROM withdraw_states WHERE state IN ('pending', 'signed')",
+                &[],
+            )
+            .await?;
+        let mut to_resume = Vec::new();
+        for row in rows {
+            to_resume.push((
+                row.get::<_, String>(0),
+                WithdrawState::parse(row.get::<_, &str>(1))?,
+                row.get::<_, String>(2),
+                to_u64(row.get::<_, i64>(3), "denomination")?,
+                row.get::<_, Vec<u8>>(4),
+            ));
+        }
+        drop(client);
+        for (request_id, state, account_id, denomination_cents, blinded_message) in to_resume {
+            match state {
+                WithdrawState::Pending => {
+                    tracing::warn!(request_id = %request_id, "recovering pending withdrawal");
+                    if let Err(e) = self
+                        .finalize_withdraw(
+                            &request_id,
+                            &account_id,
+                            denomination_cents,
+                            &blinded_message,
+                        )
+                        .await
+                    {
+                        tracing::warn!(request_id = %request_id, error = %e, "pending withdrawal compensated during recovery");
+                    }
+                }
+                WithdrawState::Signed => {
+                    self.set_state(&request_id, WithdrawState::Completed).await?;
+                }
+                WithdrawState::Completed | WithdrawState::Compensated => {}
+            }
+        }
+        Ok(())
     }
 
     /// Flush the sled nonce store to disk.
@@ -803,6 +855,36 @@ mod tests {
             bank.balance("alice").await.expect("balance"),
             Some(1_000),
             "debit was not compensated"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_completes_a_pending_withdrawal() {
+        use super::WithdrawState;
+        let tmp = TempDir::new().expect("tempdir");
+        let (bank, db) = bank_or_skip!(&tmp, DENOMS);
+        bank.create_account("alice", 1_000).await.expect("account");
+        let (req, serial, blinding) = valid_withdraw(&bank, "alice", "rp", 64);
+
+        // Simulate a crash after the debit + pending write, before signing.
+        bank.debit_and_record_pending(&req).await.expect("debit and pending");
+        assert_eq!(bank.balance("alice").await.expect("balance"), Some(1_000 - 64));
+        drop(bank);
+
+        // Reconnect to the same database and key directory: recovery signs and completes it.
+        let bank = Bank::connect(db.url(), tmp.path().join("keys"), DENOMS)
+            .await
+            .expect("reconnect");
+        let record = bank.load_record("rp").await.expect("load").expect("record present");
+        assert_eq!(record.state, WithdrawState::Completed);
+        let pk = bank.denomination_public_key(64, 0).expect("key");
+        let sig_bytes = record.blind_signature.clone().expect("signature");
+        let sig = unblind(pk, &BlindSignature(sig_bytes), &blinding, &serial).expect("unblind");
+        verify(pk, &serial, &sig).expect("recovered signature must verify");
+        assert_eq!(
+            bank.balance("alice").await.expect("balance"),
+            Some(1_000 - 64),
+            "completed withdrawal must stay debited"
         );
     }
 
