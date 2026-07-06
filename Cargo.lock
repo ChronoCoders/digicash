@@ -218,6 +218,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "digicash-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
