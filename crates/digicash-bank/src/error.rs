@@ -32,4 +32,36 @@ pub enum BankError {
     /// Account creation was requested for an id that already exists.
     #[error("account {0} already exists")]
     AccountExists(String),
+
+    /// An operation referenced an account that does not exist.
+    #[error("account {0} not found")]
+    AccountNotFound(String),
+
+    /// A withdrawal asked for more than the account holds.
+    #[error("account {account_id} has {balance} cents, cannot withdraw {requested}")]
+    InsufficientBalance {
+        account_id: String,
+        balance: u64,
+        requested: u64,
+    },
+
+    /// No key is configured for the requested `(denomination, scheme)`.
+    #[error("no key for denomination {0} scheme 0")]
+    UnknownDenomination(u64),
+
+    /// A persisted withdrawal record could not be decoded or was internally inconsistent.
+    #[error("withdrawal record for {request_id} is corrupt: {message}")]
+    MalformedRecord { request_id: String, message: String },
+
+    /// Signing failed after the debit; the debit was compensated before returning.
+    #[error("withdrawal {request_id} failed and was rolled back: {message}")]
+    WithdrawFailed { request_id: String, message: String },
+
+    /// A retry of a `request_id` whose withdrawal previously failed and was rolled back.
+    #[error("withdrawal {0} previously failed and was rolled back; use a new request_id")]
+    WithdrawPreviouslyFailed(String),
+
+    /// Crediting an account would overflow u64.
+    #[error("balance overflow crediting account {0}")]
+    BalanceOverflow(String),
 }

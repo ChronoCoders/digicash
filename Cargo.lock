@@ -255,6 +255,8 @@ version = "0.1.0"
 dependencies = [
  "digicash-core",
  "digicash-proto",
+ "serde",
+ "serde_json",
  "sled",
  "tempfile",
  "thiserror",
