@@ -5,11 +5,22 @@ use digicash_core::{
     blind, unblind, verify, BlindSignature, DefaultRng, DenominationPublicKey, Serial,
     SCHEME_ID_RSA_DETERMINISTIC,
 };
-use digicash_proto::{BalanceResponse, Coin, CreateAccountRequest, WithdrawRequest, DENOMINATIONS};
+use digicash_proto::{
+    BalanceResponse, Coin, CreateAccountRequest, DepositRejection, DepositRequest, WithdrawRequest,
+    DENOMINATIONS,
+};
 
 use crate::client::BankClient;
 use crate::error::WalletError;
 use crate::store::Store;
+
+/// The result of depositing one coin from a bundle.
+#[derive(Debug)]
+pub struct DepositOutcome {
+    pub denomination_cents: u64,
+    pub accepted: bool,
+    pub reason: Option<DepositRejection>,
+}
 
 /// A wallet: a bank client plus a local coin store.
 pub struct Wallet {
@@ -107,6 +118,29 @@ impl Wallet {
             self.store.remove_coin(&coin.serial_number)?;
         }
         Ok(selected)
+    }
+
+    /// Deposit every coin in the bundle at `bundle_path` to this wallet's account, returning
+    /// the per-coin outcome. Accepted coins credit the account; already-spent serials are
+    /// rejected as double-spends.
+    pub fn deposit(&self, bundle_path: &Path) -> Result<Vec<DepositOutcome>, WalletError> {
+        let account_id = self.store.account_id()?.ok_or(WalletError::NoAccount)?;
+        let coins: Vec<Coin> = serde_json::from_slice(&std::fs::read(bundle_path)?)?;
+        let mut outcomes = Vec::new();
+        for coin in coins {
+            let denomination_cents = coin.denomination_cents;
+            let response = self.client.deposit(&DepositRequest {
+                coin,
+                account_id: account_id.clone(),
+                request_id: new_request_id()?,
+            })?;
+            outcomes.push(DepositOutcome {
+                denomination_cents,
+                accepted: response.accepted,
+                reason: response.reason,
+            });
+        }
+        Ok(outcomes)
     }
 
     /// Fetch and parse the bank's denomination public keys (scheme 0 only), keyed by
@@ -315,5 +349,36 @@ mod tests {
             !out_dir.path().join("x.json").exists(),
             "a failed spend must not write a bundle"
         );
+    }
+
+    #[test]
+    fn deposit_accepts_then_rejects_replay() {
+        use digicash_proto::DepositRejection;
+
+        let (url, _bank) = spawn_test_bank(&[64, 512]);
+        let stores = TempDir::new().expect("stores");
+        let out_dir = TempDir::new().expect("out");
+
+        // Payer withdraws and spends a bundle out of band.
+        let payer = Wallet::open(url.clone(), stores.path().join("payer")).expect("payer");
+        payer.create_account("alice", 1000).expect("alice");
+        payer.withdraw(576).expect("withdraw");
+        let bundle = out_dir.path().join("bundle.json");
+        payer.spend(576, &bundle).expect("spend");
+
+        // Payee deposits the received bundle to its own account.
+        let payee = Wallet::open(url, stores.path().join("payee")).expect("payee");
+        payee.create_account("bob", 0).expect("bob");
+        let outcomes = payee.deposit(&bundle).expect("deposit");
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|o| o.accepted), "a coin was rejected: {outcomes:?}");
+        assert_eq!(payee.balance().expect("balance").balance_cents, 576);
+
+        // Replaying the same bundle: every coin is a double-spend, no extra credit.
+        let replay = payee.deposit(&bundle).expect("replay");
+        assert!(replay
+            .iter()
+            .all(|o| !o.accepted && o.reason == Some(DepositRejection::DoubleSpend)));
+        assert_eq!(payee.balance().expect("balance").balance_cents, 576);
     }
 }

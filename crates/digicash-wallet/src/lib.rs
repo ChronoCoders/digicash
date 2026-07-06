@@ -20,7 +20,7 @@ pub use cli::{AccountAction, Cli, Command};
 pub use client::BankClient;
 pub use error::WalletError;
 pub use store::Store;
-pub use wallet::Wallet;
+pub use wallet::{DepositOutcome, Wallet};
 
 const DEFAULT_BANK_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_STORE_PATH: &str = "digicash-wallet-store";
@@ -75,7 +75,22 @@ pub fn run(cli: Cli) -> Result<(), WalletError> {
                 bundle_path.display()
             )?;
         }
-        Command::Deposit { .. } => return Err(WalletError::NotImplemented("deposit")),
+        Command::Deposit { input } => {
+            let mut credited = 0u64;
+            for outcome in wallet.deposit(&input)? {
+                if outcome.accepted {
+                    credited = credited.saturating_add(outcome.denomination_cents);
+                    writeln!(out, "accepted {} cents", outcome.denomination_cents)?;
+                } else {
+                    writeln!(
+                        out,
+                        "rejected {} cents: {:?}",
+                        outcome.denomination_cents, outcome.reason
+                    )?;
+                }
+            }
+            writeln!(out, "credited {credited} cents total")?;
+        }
     }
     Ok(())
 }
