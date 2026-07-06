@@ -12,3 +12,8 @@ blind-rsa-signatures = "0.17.2"
 getrandom = "0.4.3"
 
 [dev-dependencies]
+# also a normal dependency; listed here so the RFC 9474 KAT integration test can build
+# keys from vector components and drive a mock RNG through the low-level API.
+blind-rsa-signatures = "0.17.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
