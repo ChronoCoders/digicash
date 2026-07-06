@@ -20,6 +20,12 @@ pub enum CoreError {
     Verification(BrsaError),
     /// A `scheme_id` this crate does not implement was supplied.
     UnsupportedScheme(u8),
+    /// The OS CSPRNG failed while generating an Ed25519 identity key.
+    IdentityKeyGeneration(getrandom::Error),
+    /// An Ed25519 public key was not a valid, canonical point.
+    IdentityPublicKeyInvalid(ed25519_dalek::SignatureError),
+    /// An Ed25519 signature did not verify under the identity public key.
+    IdentitySignatureInvalid(ed25519_dalek::SignatureError),
 }
 
 impl fmt::Display for CoreError {
@@ -40,6 +46,15 @@ impl fmt::Display for CoreError {
             CoreError::UnsupportedScheme(id) => {
                 write!(f, "unsupported scheme_id {id}; this crate implements only scheme 0")
             }
+            CoreError::IdentityKeyGeneration(e) => {
+                write!(f, "failed to generate an Ed25519 identity key from the OS CSPRNG: {e}")
+            }
+            CoreError::IdentityPublicKeyInvalid(e) => {
+                write!(f, "invalid Ed25519 identity public key: {e}")
+            }
+            CoreError::IdentitySignatureInvalid(e) => {
+                write!(f, "Ed25519 request signature did not verify: {e}")
+            }
         }
     }
 }
@@ -53,6 +68,10 @@ impl std::error::Error for CoreError {
             | CoreError::Signing(e)
             | CoreError::Unblinding(e)
             | CoreError::Verification(e) => Some(e),
+            CoreError::IdentityKeyGeneration(e) => Some(e),
+            CoreError::IdentityPublicKeyInvalid(e) | CoreError::IdentitySignatureInvalid(e) => {
+                Some(e)
+            }
             CoreError::UnsupportedScheme(_) => None,
         }
     }

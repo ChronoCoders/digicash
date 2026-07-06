@@ -9,11 +9,21 @@
 //! `blind` / `sign` / `unblind` / `verify` operations over a serial. Wire types (the
 //! `Coin` struct, deposit/withdraw messages) and the `(denomination, scheme_id)`-keyed
 //! coin verification live in `digicash-proto` and the bank (Phase 2), not here.
+//!
+//! The `auth` module adds the wallet-identity primitives of production-spec v1.2 section 2:
+//! an Ed25519 [`IdentityKeypair`] and the [`canonical_payload`] a wallet signs on every
+//! request. The transport (mTLS) and the request-signing middleware live in the bank and
+//! wallet crates; this crate holds only the primitives.
 
+mod auth;
 mod error;
 mod scheme;
 mod serial;
 
+pub use auth::{
+    canonical_payload, IdentityKeypair, IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN,
+    IDENTITY_SECRET_KEY_LEN, IDENTITY_SIGNATURE_LEN,
+};
 pub use blind_rsa_signatures::{BlindMessage, BlindSignature, BlindingResult, DefaultRng, Signature};
 pub use error::CoreError;
 pub use scheme::{
