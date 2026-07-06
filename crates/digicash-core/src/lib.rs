@@ -14,10 +14,11 @@ mod error;
 mod scheme;
 mod serial;
 
-pub use blind_rsa_signatures::DefaultRng;
+pub use blind_rsa_signatures::{BlindMessage, BlindSignature, BlindingResult, DefaultRng, Signature};
 pub use error::CoreError;
 pub use scheme::{
-    generate_keypair, DenominationKeypair, DenominationPublicKey, DenominationSecretKey,
-    MODULUS_BITS,
+    blind, ensure_supported_scheme, generate_keypair, sign_blinded, unblind, verify,
+    DenominationKeypair, DenominationPublicKey, DenominationSecretKey, MODULUS_BITS,
+    SCHEME_ID_RSA_DETERMINISTIC,
 };
 pub use serial::Serial;
