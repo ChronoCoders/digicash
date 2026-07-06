@@ -250,7 +250,13 @@ impl From<BankError> for ApiError {
             | BankError::CertGen(_)
             | BankError::Tls(_)
             | BankError::ClientVerifier(_)
-            | BankError::MalformedIdentity { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            | BankError::MalformedIdentity { .. }
+            | BankError::Db(_)
+            | BankError::Pool(_)
+            | BankError::PoolBuild(_)
+            | BankError::Sqlx(_)
+            | BankError::Migrate(_)
+            | BankError::ValueRange(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,

@@ -15,6 +15,11 @@ mod keys;
 mod serve;
 mod tls;
 
+#[cfg(any(test, feature = "test-support"))]
+mod db;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 #[cfg(test)]
 mod integration;
 

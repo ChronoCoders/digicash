@@ -7,6 +7,31 @@ pub enum BankError {
     #[error("storage error: {0}")]
     Sled(#[from] sled::Error),
 
+    /// A Postgres query or connection operation failed.
+    #[error("database error: {0}")]
+    Db(#[from] tokio_postgres::Error),
+
+    /// Checking out a connection from the pool failed.
+    #[error("database pool error: {0}")]
+    Pool(#[from] deadpool_postgres::PoolError),
+
+    /// Building the database connection pool failed.
+    #[error("database pool build error: {0}")]
+    PoolBuild(#[from] deadpool_postgres::BuildError),
+
+    /// A migration connection or query failed.
+    #[error("migration connection error: {0}")]
+    Sqlx(#[from] sqlx::Error),
+
+    /// Running schema migrations failed.
+    #[error("migration error: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
+
+    /// A value read from or written to Postgres was out of the expected range (for example a
+    /// negative balance where a `u64` cents value is expected).
+    #[error("database value out of range: {0}")]
+    ValueRange(String),
+
     /// Reading or writing a key file failed.
     #[error("key directory I/O error: {0}")]
     Io(#[from] std::io::Error),
