@@ -1,22 +1,23 @@
-//! digicash bank: a sled-backed account ledger, per-denomination key store, spent-serial
-//! store, and the withdraw/deposit protocol. Source of truth: `digicash-spec.md` v0.3.
+//! digicash bank: a Postgres-backed account ledger, spent-serial store, withdraw state
+//! machine, and deposit protocol (production-spec v1.3 section 4), with per-denomination
+//! signing keys held on disk. The anti-replay nonce store is still sled-backed and moves to
+//! Postgres in a later unit.
 //!
 //! Production-spec v1.2 section 2 authentication lives here: [`authenticated_router`] wraps
 //! every value-bearing endpoint in the Ed25519 request-signing middleware, served over mTLS
 //! via [`serve_tls`] with a self-signed [`CertAuthority`]. The legacy plaintext [`router`] is
-//! retained for local development only. Postgres/HSM storage remains a production-doc item,
+//! retained for local development only. HSM/KMS key storage remains a production-doc item,
 //! out of scope here.
 
 mod api;
 mod auth;
 mod bank;
+mod db;
 mod error;
 mod keys;
 mod serve;
 mod tls;
 
-#[cfg(any(test, feature = "test-support"))]
-mod db;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 

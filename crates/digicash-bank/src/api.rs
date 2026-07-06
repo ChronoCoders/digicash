@@ -98,7 +98,7 @@ async fn register(
         status: StatusCode::BAD_REQUEST,
         message: e.to_string(),
     })?;
-    bank.register_identity(&req.account_id, &public_key)?;
+    bank.register_identity(&req.account_id, &public_key).await?;
     let identity = ca.issue_client_identity(&req.account_id)?;
     Ok(Json(RegisterResponse {
         client_cert_pem: identity.cert_pem,
@@ -129,7 +129,8 @@ async fn create_account_authenticated(
 ) -> Result<Json<BalanceResponse>, ApiError> {
     ensure_account(&auth, &req.account_id)?;
     Ok(Json(
-        bank.create_account(&req.account_id, req.initial_balance_cents)?,
+        bank.create_account(&req.account_id, req.initial_balance_cents)
+            .await?,
     ))
 }
 
@@ -139,7 +140,7 @@ async fn get_balance_authenticated(
     Path(account_id): Path<String>,
 ) -> Result<Json<BalanceResponse>, ApiError> {
     ensure_account(&auth, &account_id)?;
-    balance_response(&bank, account_id)
+    balance_response(&bank, account_id).await
 }
 
 async fn withdraw_authenticated(
@@ -148,7 +149,7 @@ async fn withdraw_authenticated(
     Json(req): Json<WithdrawRequest>,
 ) -> Result<Json<WithdrawResponse>, ApiError> {
     ensure_account(&auth, &req.account_id)?;
-    Ok(Json(bank.withdraw(&req)?))
+    Ok(Json(bank.withdraw(&req).await?))
 }
 
 async fn deposit_authenticated(
@@ -157,7 +158,7 @@ async fn deposit_authenticated(
     Json(req): Json<DepositRequest>,
 ) -> Result<Json<DepositResponse>, ApiError> {
     ensure_account(&auth, &req.account_id)?;
-    Ok(Json(bank.deposit(&req)?))
+    Ok(Json(bank.deposit(&req).await?))
 }
 
 async fn denominations(
@@ -173,7 +174,8 @@ async fn create_account(
     Json(req): Json<CreateAccountRequest>,
 ) -> Result<Json<BalanceResponse>, ApiError> {
     Ok(Json(
-        bank.create_account(&req.account_id, req.initial_balance_cents)?,
+        bank.create_account(&req.account_id, req.initial_balance_cents)
+            .await?,
     ))
 }
 
@@ -181,11 +183,14 @@ async fn get_balance(
     State(bank): State<Arc<Bank>>,
     Path(account_id): Path<String>,
 ) -> Result<Json<BalanceResponse>, ApiError> {
-    balance_response(&bank, account_id)
+    balance_response(&bank, account_id).await
 }
 
-fn balance_response(bank: &Bank, account_id: String) -> Result<Json<BalanceResponse>, ApiError> {
-    match bank.balance(&account_id)? {
+async fn balance_response(
+    bank: &Bank,
+    account_id: String,
+) -> Result<Json<BalanceResponse>, ApiError> {
+    match bank.balance(&account_id).await? {
         Some(balance_cents) => Ok(Json(BalanceResponse {
             account_id,
             balance_cents,
@@ -201,14 +206,14 @@ async fn withdraw(
     State(bank): State<Arc<Bank>>,
     Json(req): Json<WithdrawRequest>,
 ) -> Result<Json<WithdrawResponse>, ApiError> {
-    Ok(Json(bank.withdraw(&req)?))
+    Ok(Json(bank.withdraw(&req).await?))
 }
 
 async fn deposit(
     State(bank): State<Arc<Bank>>,
     Json(req): Json<DepositRequest>,
 ) -> Result<Json<DepositResponse>, ApiError> {
-    Ok(Json(bank.deposit(&req)?))
+    Ok(Json(bank.deposit(&req).await?))
 }
 
 /// An error response with an HTTP status. Deposit rejections are *not* errors; they are
@@ -269,6 +274,7 @@ impl From<BankError> for ApiError {
 mod tests {
     use super::router;
     use crate::bank::Bank;
+    use crate::test_support::TestDatabase;
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use axum::response::Response;
@@ -277,10 +283,13 @@ mod tests {
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    fn app(tmp: &TempDir) -> axum::Router {
-        let bank = Bank::open(tmp.path().join("db"), tmp.path().join("keys"), &[64])
-            .expect("bank should open");
-        router(Arc::new(bank))
+    /// Build a router over a bank on a fresh test database, or `None` if `DATABASE_URL` is unset.
+    async fn app(tmp: &TempDir) -> Option<axum::Router> {
+        let db = TestDatabase::create().await.expect("test db")?;
+        let bank = Bank::connect(db.url(), tmp.path().join("keys"), &[64])
+            .await
+            .expect("bank connect");
+        Some(router(Arc::new(bank)))
     }
 
     fn post(uri: &str, body: &impl serde::Serialize) -> Request<Body> {
@@ -310,7 +319,10 @@ mod tests {
     #[tokio::test]
     async fn create_credit_and_read_back_balance() {
         let tmp = TempDir::new().expect("tempdir");
-        let app = app(&tmp);
+        let Some(app) = app(&tmp).await else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
 
         let create = post(
             "/accounts",

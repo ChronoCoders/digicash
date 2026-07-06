@@ -63,6 +63,7 @@ async fn authenticate(bank: &Bank, request: Request) -> Result<Request, AuthReje
 
     let pubkey = bank
         .identity_pubkey(&auth.account_id)
+        .await
         .map_err(AuthRejection::internal)?
         .ok_or_else(|| AuthRejection::unauthorized("account has no registered signing key"))?;
 
@@ -172,6 +173,7 @@ impl IntoResponse for AuthRejection {
 mod tests {
     use super::{verify_signed_request, AuthenticatedAccount, NONCE_TTL_SECS};
     use crate::bank::Bank;
+    use crate::test_support::TestDatabase;
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use axum::response::Response;
@@ -228,13 +230,28 @@ mod tests {
             .expect("request")
     }
 
-    fn open_bank(tmp: &TempDir) -> (Arc<Bank>, IdentityKeypair) {
-        let bank = Bank::open(tmp.path().join("db"), tmp.path().join("keys"), &[64])
-            .expect("bank open");
+    async fn open_bank(tmp: &TempDir) -> Option<(Arc<Bank>, IdentityKeypair)> {
+        let db = TestDatabase::create().await.expect("test db")?;
+        let bank = Bank::connect(db.url(), tmp.path().join("keys"), &[64])
+            .await
+            .expect("bank connect");
         let kp = IdentityKeypair::generate().expect("keypair");
         bank.register_identity("alice", &kp.public_key())
+            .await
             .expect("register");
-        (Arc::new(bank), kp)
+        Some((Arc::new(bank), kp))
+    }
+
+    macro_rules! bank_or_skip {
+        ($tmp:expr) => {
+            match open_bank($tmp).await {
+                Some(pair) => pair,
+                None => {
+                    eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+                    return;
+                }
+            }
+        };
     }
 
     async fn body_text(resp: Response) -> String {
@@ -245,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn valid_signed_request_is_accepted() {
         let tmp = TempDir::new().expect("tempdir");
-        let (bank, kp) = open_bank(&tmp);
+        let (bank, kp) = bank_or_skip!(&tmp);
         let req = signed_request(&kp, "alice", b"{}", now(), "nonce-ok", false);
         let resp = app(bank).oneshot(req).await.expect("send");
         assert_eq!(resp.status(), StatusCode::OK);
@@ -255,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn missing_signature_header_is_rejected() {
         let tmp = TempDir::new().expect("tempdir");
-        let (bank, _kp) = open_bank(&tmp);
+        let (bank, _kp) = bank_or_skip!(&tmp);
         let req = Request::builder()
             .method("POST")
             .uri("/echo")
@@ -271,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn bad_signature_is_rejected() {
         let tmp = TempDir::new().expect("tempdir");
-        let (bank, kp) = open_bank(&tmp);
+        let (bank, kp) = bank_or_skip!(&tmp);
         let req = signed_request(&kp, "alice", b"{}", now(), "nonce-bad", true);
         let resp = app(bank).oneshot(req).await.expect("send");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -280,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn stale_timestamp_is_rejected() {
         let tmp = TempDir::new().expect("tempdir");
-        let (bank, kp) = open_bank(&tmp);
+        let (bank, kp) = bank_or_skip!(&tmp);
         let stale = now() - (NONCE_TTL_SECS + 10);
         let req = signed_request(&kp, "alice", b"{}", stale, "nonce-stale", false);
         let resp = app(bank).oneshot(req).await.expect("send");
@@ -290,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn replayed_nonce_is_rejected() {
         let tmp = TempDir::new().expect("tempdir");
-        let (bank, kp) = open_bank(&tmp);
+        let (bank, kp) = bank_or_skip!(&tmp);
         let ts = now();
         let first = signed_request(&kp, "alice", b"{}", ts, "nonce-replay", false);
         let resp = app(bank.clone()).oneshot(first).await.expect("first");
@@ -304,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn unregistered_account_is_rejected() {
         let tmp = TempDir::new().expect("tempdir");
-        let (bank, kp) = open_bank(&tmp);
+        let (bank, kp) = bank_or_skip!(&tmp);
         // Sign under an account the bank has no key for.
         let req = signed_request(&kp, "stranger", b"{}", now(), "nonce-x", false);
         let resp = app(bank).oneshot(req).await.expect("send");

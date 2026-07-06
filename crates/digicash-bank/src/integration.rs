@@ -15,6 +15,7 @@ use digicash_proto::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use crate::test_support::TestDatabase;
 use crate::{router, Bank};
 
 async fn call<T: serde::de::DeserializeOwned>(app: &Router, req: Request<Body>) -> (StatusCode, T) {
@@ -44,7 +45,13 @@ fn get(uri: &str) -> Request<Body> {
 #[tokio::test]
 async fn withdraw_deposit_and_double_spend_over_http() {
     let tmp = TempDir::new().expect("tempdir");
-    let bank = Bank::open(tmp.path().join("db"), tmp.path().join("keys"), &[64]).expect("bank");
+    let Some(db) = TestDatabase::create().await.expect("test db") else {
+        eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+        return;
+    };
+    let bank = Bank::connect(db.url(), tmp.path().join("keys"), &[64])
+        .await
+        .expect("bank");
     // Keep the public key for wallet-side blinding before the bank moves into the router.
     let pk: DenominationPublicKey = bank.denomination_public_key(64, 0).expect("key").clone();
     let app = router(Arc::new(bank));
