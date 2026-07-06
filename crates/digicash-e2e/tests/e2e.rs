@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use digicash_wallet::BankClient;
+use digicash_wallet::{BankClient, Wallet};
 use tempfile::TempDir;
 
 /// A spawned `digicash-bank` process, killed on drop. The caller owns the data and key
@@ -96,6 +96,10 @@ fn shared_key_dir() -> &'static Path {
     .as_path()
 }
 
+fn open_wallet(bank_url: &str, store_dir: &Path) -> Wallet {
+    Wallet::open(bank_url.to_string(), store_dir).expect("open wallet")
+}
+
 #[test]
 fn bank_spawns_responds_and_shuts_down() {
     let db = TempDir::new().expect("db tempdir");
@@ -112,4 +116,25 @@ fn bank_spawns_responds_and_shuts_down() {
     );
 
     drop(bank);
+}
+
+#[test]
+fn two_accounts_created_with_expected_balances() {
+    let db = TempDir::new().expect("db tempdir");
+    let bank = BankProcess::spawn(db.path(), shared_key_dir());
+    let store_a = TempDir::new().expect("store a");
+    let store_b = TempDir::new().expect("store b");
+
+    let wallet_a = open_wallet(bank.url(), store_a.path());
+    let wallet_b = open_wallet(bank.url(), store_b.path());
+    wallet_a.create_account("wallet-a", 1000).expect("create wallet-a");
+    wallet_b.create_account("wallet-b", 0).expect("create wallet-b");
+
+    assert_eq!(wallet_a.balance().expect("balance a").balance_cents, 1000);
+    assert_eq!(wallet_b.balance().expect("balance b").balance_cents, 0);
+
+    // Verify directly against the live bank as well.
+    let client = BankClient::new(bank.url().to_string());
+    assert_eq!(client.balance("wallet-a").expect("get a").balance_cents, 1000);
+    assert_eq!(client.balance("wallet-b").expect("get b").balance_cents, 0);
 }
