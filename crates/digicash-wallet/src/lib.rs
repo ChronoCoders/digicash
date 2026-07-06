@@ -7,9 +7,11 @@
 
 mod cli;
 mod error;
+mod store;
 
 pub use cli::{AccountAction, Cli, Command};
 pub use error::WalletError;
+pub use store::Store;
 
 /// Dispatch a parsed CLI command.
 pub fn run(cli: Cli) -> Result<(), WalletError> {

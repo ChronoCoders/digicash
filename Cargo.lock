@@ -450,6 +450,10 @@ name = "digicash-wallet"
 version = "0.2.2"
 dependencies = [
  "clap",
+ "digicash-proto",
+ "serde_json",
+ "sled",
+ "tempfile",
  "thiserror",
 ]
 
