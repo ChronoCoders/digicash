@@ -5,12 +5,16 @@ use digicash_proto::Coin;
 use crate::error::WalletError;
 
 const COINS_TREE: &str = "coins";
+const META_TREE: &str = "meta";
+const ACCOUNT_ID_KEY: &[u8] = b"account_id";
 
 /// The wallet's local coin store, backed by sled. Coins are bearer instruments, keyed by
-/// their 32-byte serial number, and survive restarts.
+/// their 32-byte serial number, and survive restarts. The meta tree holds the wallet's
+/// account id.
 pub struct Store {
     db: sled::Db,
     coins: sled::Tree,
+    meta: sled::Tree,
 }
 
 impl Store {
@@ -18,7 +22,25 @@ impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, WalletError> {
         let db = sled::open(path)?;
         let coins = db.open_tree(COINS_TREE)?;
-        Ok(Self { db, coins })
+        let meta = db.open_tree(META_TREE)?;
+        Ok(Self { db, coins, meta })
+    }
+
+    /// Record this wallet's account id.
+    pub fn set_account_id(&self, account_id: &str) -> Result<(), WalletError> {
+        self.meta.insert(ACCOUNT_ID_KEY, account_id.as_bytes())?;
+        self.db.flush()?;
+        Ok(())
+    }
+
+    /// This wallet's account id, if one has been created.
+    pub fn account_id(&self) -> Result<Option<String>, WalletError> {
+        match self.meta.get(ACCOUNT_ID_KEY)? {
+            Some(bytes) => Ok(Some(
+                String::from_utf8(bytes.to_vec()).map_err(|_| WalletError::CorruptAccountId)?,
+            )),
+            None => Ok(None),
+        }
     }
 
     /// Store a coin, keyed by its serial number, and flush for durability.
