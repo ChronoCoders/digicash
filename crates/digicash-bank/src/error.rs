@@ -85,4 +85,16 @@ pub enum BankError {
     /// Crediting an account would overflow u64.
     #[error("balance overflow crediting account {0}")]
     BalanceOverflow(String),
+
+    /// Generating or serializing an X.509 certificate failed.
+    #[error("certificate error: {0}")]
+    CertGen(#[from] rcgen::Error),
+
+    /// Building a rustls TLS configuration failed.
+    #[error("TLS configuration error: {0}")]
+    Tls(#[from] rustls::Error),
+
+    /// Building the mTLS client-certificate verifier failed.
+    #[error("client certificate verifier error: {0}")]
+    ClientVerifier(#[from] rustls::server::VerifierBuilderError),
 }

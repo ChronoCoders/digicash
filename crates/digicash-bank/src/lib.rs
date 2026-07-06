@@ -9,6 +9,7 @@ mod api;
 mod bank;
 mod error;
 mod keys;
+mod tls;
 
 #[cfg(test)]
 mod integration;
@@ -17,3 +18,4 @@ pub use api::router;
 pub use bank::Bank;
 pub use digicash_proto::DENOMINATIONS;
 pub use error::BankError;
+pub use tls::{CertAuthority, ClientIdentity};
