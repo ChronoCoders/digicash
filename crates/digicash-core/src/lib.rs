@@ -9,3 +9,9 @@
 //! `blind` / `sign` / `unblind` / `verify` operations over a serial. Wire types (the
 //! `Coin` struct, deposit/withdraw messages) and the `(denomination, scheme_id)`-keyed
 //! coin verification live in `digicash-proto` and the bank (Phase 2), not here.
+
+mod error;
+mod serial;
+
+pub use error::CoreError;
+pub use serial::Serial;
