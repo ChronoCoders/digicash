@@ -31,4 +31,24 @@ pub enum WalletError {
     /// The locally stored account id is not valid UTF-8.
     #[error("stored account id is corrupt (not UTF-8)")]
     CorruptAccountId,
+
+    /// A core cryptographic operation (blind, unblind, verify, serial) failed.
+    #[error("cryptographic error: {0}")]
+    Core(#[from] digicash_core::CoreError),
+
+    /// A bank public key could not be parsed from its published SPKI.
+    #[error("could not parse a bank public key: {0}")]
+    KeyParse(String),
+
+    /// The OS CSPRNG failed while generating a request id.
+    #[error("randomness error: {0}")]
+    Random(#[from] getrandom::Error),
+
+    /// The bank does not serve a denomination the wallet needs.
+    #[error("the bank does not serve denomination {0} cents")]
+    UnknownDenomination(u64),
+
+    /// The local coin stock cannot cover a spend exactly.
+    #[error("cannot spend {requested} cents exactly: only {available} cents available in coins that fit")]
+    InsufficientCoins { requested: u64, available: u64 },
 }

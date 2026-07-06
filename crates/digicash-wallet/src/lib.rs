@@ -53,7 +53,15 @@ pub fn run(cli: Cli) -> Result<(), WalletError> {
             let response = wallet.balance()?;
             writeln!(out, "{} cents", response.balance_cents)?;
         }
-        Command::Withdraw { .. } => return Err(WalletError::NotImplemented("withdraw")),
+        Command::Withdraw { amount_cents } => {
+            let coins = wallet.withdraw(amount_cents)?;
+            writeln!(
+                out,
+                "withdrew {} coins totalling {} cents",
+                coins.len(),
+                amount_cents
+            )?;
+        }
         Command::Spend { .. } => return Err(WalletError::NotImplemented("spend")),
         Command::Deposit { .. } => return Err(WalletError::NotImplemented("deposit")),
     }

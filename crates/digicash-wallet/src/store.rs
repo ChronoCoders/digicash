@@ -58,6 +58,23 @@ impl Store {
             None => Ok(None),
         }
     }
+
+    /// Every coin currently held.
+    pub fn list_coins(&self) -> Result<Vec<Coin>, WalletError> {
+        let mut coins = Vec::new();
+        for entry in self.coins.iter() {
+            let (_serial, bytes) = entry?;
+            coins.push(serde_json::from_slice(&bytes)?);
+        }
+        Ok(coins)
+    }
+
+    /// Remove a coin by its serial number, returning whether it was present.
+    pub fn remove_coin(&self, serial: &[u8; 32]) -> Result<bool, WalletError> {
+        let removed = self.coins.remove(serial)?.is_some();
+        self.db.flush()?;
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
