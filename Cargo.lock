@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "digicash-bank"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "digicash-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blind-rsa-signatures",
  "ed25519-dalek",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "digicash-e2e"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "digicash-bank",
  "digicash-core",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "digicash-proto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "digicash-wallet"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "digicash-bank",
