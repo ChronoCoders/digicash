@@ -10,6 +10,9 @@ mod bank;
 mod error;
 mod keys;
 
+#[cfg(test)]
+mod integration;
+
 pub use api::router;
 pub use bank::Bank;
 pub use error::BankError;
