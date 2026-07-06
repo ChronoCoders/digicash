@@ -707,6 +707,7 @@ mod tests {
         Serial,
     };
     use digicash_proto::{Coin, DepositRejection, DepositRequest, WithdrawRequest};
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     const DENOMS: &[u64] = &[64];
@@ -972,6 +973,47 @@ mod tests {
             .expect("deposit");
         assert_eq!(resp.reason, Some(DepositRejection::InvalidSignature));
         assert_eq!(bank.balance("bob").await.expect("balance"), Some(0));
+    }
+
+    #[tokio::test]
+    async fn concurrent_double_spend_credits_exactly_once() {
+        let tmp = TempDir::new().expect("tempdir");
+        let (bank, _db) = bank_or_skip!(&tmp, DENOMS);
+        let bank = Arc::new(bank);
+        bank.create_account("alice", 1_000).await.expect("alice");
+        bank.create_account("bob", 0).await.expect("bob");
+        let coin = mint_coin(&bank, "alice", "w1", 64).await;
+
+        // Two concurrent deposits of the same coin under different request ids. The unique
+        // constraint on spent_serials makes the check-and-insert atomic, so exactly one wins.
+        let d1 = DepositRequest {
+            coin: coin.clone(),
+            account_id: "bob".to_string(),
+            request_id: "d1".to_string(),
+        };
+        let d2 = DepositRequest {
+            coin,
+            account_id: "bob".to_string(),
+            request_id: "d2".to_string(),
+        };
+        let (b1, b2) = (bank.clone(), bank.clone());
+        let (r1, r2) = tokio::join!(
+            async move { b1.deposit(&d1).await.expect("deposit d1") },
+            async move { b2.deposit(&d2).await.expect("deposit d2") },
+        );
+
+        let accepted = [&r1, &r2].iter().filter(|r| r.accepted).count();
+        let double_spends = [&r1, &r2]
+            .iter()
+            .filter(|r| r.reason == Some(DepositRejection::DoubleSpend))
+            .count();
+        assert_eq!(accepted, 1, "exactly one concurrent deposit must be accepted: {r1:?} {r2:?}");
+        assert_eq!(double_spends, 1, "the loser must be a double-spend: {r1:?} {r2:?}");
+        assert_eq!(
+            bank.balance("bob").await.expect("balance"),
+            Some(64),
+            "the payee must be credited exactly once"
+        );
     }
 
     #[tokio::test]
