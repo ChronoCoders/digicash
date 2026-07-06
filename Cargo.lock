@@ -605,12 +605,15 @@ dependencies = [
 name = "digicash-wallet"
 version = "0.4.0"
 dependencies = [
- "axum",
  "clap",
  "digicash-bank",
  "digicash-core",
  "digicash-proto",
  "getrandom 0.4.3",
+ "hex",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
  "serde_json",
  "sled",
  "tempfile",

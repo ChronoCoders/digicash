@@ -178,8 +178,14 @@ impl Bank {
         account_id: &str,
         public_key: &IdentityPublicKey,
     ) -> Result<(), BankError> {
-        self.identities
-            .insert(account_id.as_bytes(), &public_key.to_bytes())?;
+        let created = self.identities.compare_and_swap(
+            account_id.as_bytes(),
+            None as Option<&[u8]>,
+            Some(public_key.to_bytes().to_vec()),
+        )?;
+        if created.is_err() {
+            return Err(BankError::IdentityExists(account_id.to_string()));
+        }
         self.db.flush()?;
         Ok(())
     }

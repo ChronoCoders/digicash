@@ -83,6 +83,29 @@ pub struct BalanceResponse {
     pub balance_cents: u64,
 }
 
+/// `POST /register` request: a wallet enrolls its Ed25519 identity key for an account and
+/// asks the bank to issue a client certificate. Unauthenticated bootstrap: it runs over
+/// server-authenticated TLS before the wallet has a client certificate (spec v1.2 section 2).
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    /// The account id to bind the identity key to.
+    pub account_id: String,
+    /// The wallet's Ed25519 public key, 32 bytes as lowercase hex.
+    pub public_key_hex: String,
+}
+
+/// `POST /register` response: the CA-signed client certificate and key the wallet uses for
+/// mTLS, plus the CA certificate so the wallet can pin the bank.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegisterResponse {
+    /// The issued client certificate, PEM.
+    pub client_cert_pem: String,
+    /// The issued client private key, PKCS#8 PEM.
+    pub client_key_pem: String,
+    /// The bank's CA certificate, PEM.
+    pub ca_cert_pem: String,
+}
+
 /// Body of an HTTP error response.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ErrorResponse {

@@ -13,6 +13,7 @@ use rustls::{RootCertStore, ServerConfig};
 use crate::error::BankError;
 
 const CA_KEY_FILE: &str = "ca-key.pem";
+const CA_CERT_FILE: &str = "ca-cert.pem";
 const CA_COMMON_NAME: &str = "digicash bank CA";
 const SERVER_COMMON_NAME: &str = "digicash bank";
 
@@ -55,6 +56,9 @@ impl CertAuthority {
             key
         };
         let ca_cert = ca_params()?.self_signed(&ca_key)?;
+        // Publish the CA certificate to the key directory so wallets can be provisioned with
+        // it out-of-band to pin the bank. Rewritten each startup; stable under the same key.
+        fs::write(key_dir.join(CA_CERT_FILE), ca_cert.pem())?;
 
         let server_key = KeyPair::generate()?;
         let server_cert = server_params()?.signed_by(&server_key, &ca_cert, &ca_key)?;
@@ -90,6 +94,18 @@ impl CertAuthority {
         let config = ServerConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()?
             .with_client_cert_verifier(verifier)
+            .with_single_cert(vec![self.server_cert_der.clone()], key)?;
+        Ok(Arc::new(config))
+    }
+
+    /// A rustls server configuration for the enrollment endpoint: server-authenticated TLS
+    /// with no client certificate required. Registration runs here because it is how a wallet
+    /// obtains its client certificate in the first place, so it cannot itself require one.
+    pub fn enrollment_server_config(&self) -> Result<Arc<ServerConfig>, BankError> {
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.server_key_der.clone()));
+        let config = ServerConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
             .with_single_cert(vec![self.server_cert_der.clone()], key)?;
         Ok(Arc::new(config))
     }

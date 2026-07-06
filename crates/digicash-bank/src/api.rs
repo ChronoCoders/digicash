@@ -1,19 +1,22 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRef, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
+use digicash_core::IdentityPublicKey;
 use digicash_proto::{
     BalanceResponse, CreateAccountRequest, DenominationsResponse, DepositRequest, DepositResponse,
-    ErrorResponse, WithdrawRequest, WithdrawResponse,
+    ErrorResponse, RegisterRequest, RegisterResponse, WithdrawRequest, WithdrawResponse,
 };
 
+use crate::auth::{verify_signed_request, AuthenticatedAccount};
 use crate::bank::Bank;
 use crate::error::BankError;
+use crate::tls::CertAuthority;
 
-/// Build the bank's HTTP router over shared bank state.
+/// Build the bank's plaintext, unauthenticated HTTP router (local development only).
 pub fn router(bank: Arc<Bank>) -> Router {
     Router::new()
         .route("/accounts", post(create_account))
@@ -22,6 +25,139 @@ pub fn router(bank: Arc<Bank>) -> Router {
         .route("/withdraw", post(withdraw))
         .route("/deposit", post(deposit))
         .with_state(bank)
+}
+
+/// Shared state for the authenticated router: the ledger plus the certificate authority that
+/// issues client certificates at registration.
+#[derive(Clone)]
+struct AppState {
+    bank: Arc<Bank>,
+    ca: Arc<CertAuthority>,
+}
+
+impl FromRef<AppState> for Arc<Bank> {
+    fn from_ref(state: &AppState) -> Self {
+        state.bank.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<CertAuthority> {
+    fn from_ref(state: &AppState) -> Self {
+        state.ca.clone()
+    }
+}
+
+/// Build the mTLS value router served on the main port (production-spec v1.2 section 2).
+///
+/// Every value-bearing route is wrapped by [`verify_signed_request`], so it is reached only
+/// after the request's Ed25519 signature, timestamp, and nonce are verified; those handlers
+/// additionally require the authenticated account to match the account they act on.
+/// `GET /denominations` is public key material and carries no auth. This router is served
+/// under mutual TLS, so every client also presents a CA-issued certificate. Registration is
+/// not here - it cannot require a client certificate; see [`enrollment_router`].
+pub fn authenticated_router(bank: Arc<Bank>, ca: Arc<CertAuthority>) -> Router {
+    let protected = Router::new()
+        .route("/accounts", post(create_account_authenticated))
+        .route("/accounts/{id}/balance", get(get_balance_authenticated))
+        .route("/withdraw", post(withdraw_authenticated))
+        .route("/deposit", post(deposit_authenticated))
+        .route_layer(axum::middleware::from_fn_with_state(
+            bank.clone(),
+            verify_signed_request,
+        ));
+    let public = Router::new().route("/denominations", get(denominations));
+    protected
+        .merge(public)
+        .with_state(AppState { bank, ca })
+}
+
+/// Build the enrollment router served on the enrollment port over server-authenticated TLS
+/// (no client certificate). It exposes only `POST /register`, which binds an account's
+/// Ed25519 key and issues its mTLS client certificate.
+pub fn enrollment_router(bank: Arc<Bank>, ca: Arc<CertAuthority>) -> Router {
+    Router::new()
+        .route("/register", post(register))
+        .with_state(AppState { bank, ca })
+}
+
+async fn register(
+    State(bank): State<Arc<Bank>>,
+    State(ca): State<Arc<CertAuthority>>,
+    Json(req): Json<RegisterRequest>,
+) -> Result<Json<RegisterResponse>, ApiError> {
+    let raw = hex::decode(&req.public_key_hex).map_err(|_| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message: "public_key_hex is not valid hex".to_string(),
+    })?;
+    let bytes: [u8; digicash_core::IDENTITY_PUBLIC_KEY_LEN] =
+        raw.as_slice().try_into().map_err(|_| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "public key must be 32 bytes".to_string(),
+        })?;
+    let public_key = IdentityPublicKey::from_bytes(&bytes).map_err(|e| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message: e.to_string(),
+    })?;
+    bank.register_identity(&req.account_id, &public_key)?;
+    let identity = ca.issue_client_identity(&req.account_id)?;
+    Ok(Json(RegisterResponse {
+        client_cert_pem: identity.cert_pem,
+        client_key_pem: identity.key_pem,
+        ca_cert_pem: ca.ca_cert_pem(),
+    }))
+}
+
+/// Reject a request whose signed identity does not match the account it targets.
+fn ensure_account(authenticated: &AuthenticatedAccount, target: &str) -> Result<(), ApiError> {
+    if authenticated.0 == target {
+        Ok(())
+    } else {
+        Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: format!(
+                "authenticated account {} may not act on account {target}",
+                authenticated.0
+            ),
+        })
+    }
+}
+
+async fn create_account_authenticated(
+    State(bank): State<Arc<Bank>>,
+    Extension(auth): Extension<AuthenticatedAccount>,
+    Json(req): Json<CreateAccountRequest>,
+) -> Result<Json<BalanceResponse>, ApiError> {
+    ensure_account(&auth, &req.account_id)?;
+    Ok(Json(
+        bank.create_account(&req.account_id, req.initial_balance_cents)?,
+    ))
+}
+
+async fn get_balance_authenticated(
+    State(bank): State<Arc<Bank>>,
+    Extension(auth): Extension<AuthenticatedAccount>,
+    Path(account_id): Path<String>,
+) -> Result<Json<BalanceResponse>, ApiError> {
+    ensure_account(&auth, &account_id)?;
+    balance_response(&bank, account_id)
+}
+
+async fn withdraw_authenticated(
+    State(bank): State<Arc<Bank>>,
+    Extension(auth): Extension<AuthenticatedAccount>,
+    Json(req): Json<WithdrawRequest>,
+) -> Result<Json<WithdrawResponse>, ApiError> {
+    ensure_account(&auth, &req.account_id)?;
+    Ok(Json(bank.withdraw(&req)?))
+}
+
+async fn deposit_authenticated(
+    State(bank): State<Arc<Bank>>,
+    Extension(auth): Extension<AuthenticatedAccount>,
+    Json(req): Json<DepositRequest>,
+) -> Result<Json<DepositResponse>, ApiError> {
+    ensure_account(&auth, &req.account_id)?;
+    Ok(Json(bank.deposit(&req)?))
 }
 
 async fn denominations(
@@ -45,6 +181,10 @@ async fn get_balance(
     State(bank): State<Arc<Bank>>,
     Path(account_id): Path<String>,
 ) -> Result<Json<BalanceResponse>, ApiError> {
+    balance_response(&bank, account_id)
+}
+
+fn balance_response(bank: &Bank, account_id: String) -> Result<Json<BalanceResponse>, ApiError> {
     match bank.balance(&account_id)? {
         Some(balance_cents) => Ok(Json(BalanceResponse {
             account_id,
@@ -93,9 +233,9 @@ impl IntoResponse for ApiError {
 impl From<BankError> for ApiError {
     fn from(error: BankError) -> Self {
         let status = match &error {
-            BankError::AccountExists(_) | BankError::WithdrawPreviouslyFailed(_) => {
-                StatusCode::CONFLICT
-            }
+            BankError::AccountExists(_)
+            | BankError::WithdrawPreviouslyFailed(_)
+            | BankError::IdentityExists(_) => StatusCode::CONFLICT,
             BankError::AccountNotFound(_) => StatusCode::NOT_FOUND,
             BankError::InsufficientBalance { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             BankError::UnknownDenomination(_) => StatusCode::BAD_REQUEST,

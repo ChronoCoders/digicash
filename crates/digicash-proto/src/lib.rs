@@ -19,8 +19,8 @@ pub use auth::{
 pub use coin::Coin;
 pub use messages::{
     BalanceResponse, CreateAccountRequest, DenominationKey, DenominationsResponse,
-    DepositRejection, DepositRequest, DepositResponse, ErrorResponse, WithdrawRequest,
-    WithdrawResponse,
+    DepositRejection, DepositRequest, DepositResponse, ErrorResponse, RegisterRequest,
+    RegisterResponse, WithdrawRequest, WithdrawResponse,
 };
 
 /// The coin denominations, in integer cents: powers of two from 1 to 8192 (spec v0.3
@@ -101,6 +101,22 @@ mod tests {
         ] {
             roundtrip(reason);
         }
+    }
+
+    #[test]
+    fn register_messages_roundtrip() {
+        roundtrip(RegisterRequest {
+            account_id: "alice".into(),
+            public_key_hex: "aa".repeat(32),
+        });
+        roundtrip(RegisterResponse {
+            client_cert_pem: "-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----\n"
+                .into(),
+            client_key_pem: "-----BEGIN PRIVATE KEY-----\nMIG...\n-----END PRIVATE KEY-----\n"
+                .into(),
+            ca_cert_pem: "-----BEGIN CERTIFICATE-----\nMIIca...\n-----END CERTIFICATE-----\n"
+                .into(),
+        });
     }
 
     #[test]

@@ -106,4 +106,8 @@ pub enum BankError {
         /// What was wrong with the record.
         message: String,
     },
+
+    /// Registration was requested for an account that already has a registered identity key.
+    #[error("account {0} already has a registered identity key")]
+    IdentityExists(String),
 }

@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use digicash_core::{
-    blind, unblind, verify, BlindSignature, DefaultRng, DenominationPublicKey, Serial,
-    SCHEME_ID_RSA_DETERMINISTIC,
+    blind, unblind, verify, BlindSignature, DefaultRng, DenominationPublicKey, IdentityKeypair,
+    Serial, SCHEME_ID_RSA_DETERMINISTIC,
 };
 use digicash_proto::{
-    BalanceResponse, Coin, CreateAccountRequest, DepositRejection, DepositRequest, WithdrawRequest,
-    DENOMINATIONS,
+    BalanceResponse, Coin, CreateAccountRequest, DepositRejection, DepositRequest, RegisterRequest,
+    WithdrawRequest, DENOMINATIONS,
 };
 
-use crate::client::BankClient;
+use crate::client::{BankClient, EnrollClient};
 use crate::error::WalletError;
-use crate::store::Store;
+use crate::store::{Store, StoredIdentity};
 
 /// The result of depositing one coin from a bundle.
 #[derive(Debug)]
@@ -25,9 +25,10 @@ pub struct DepositOutcome {
     pub reason: Option<DepositRejection>,
 }
 
-/// A wallet: a bank client plus a local coin store.
+/// A wallet: a persistent identity/coin store plus the bank URL. Each operation builds an
+/// authenticated (mTLS + request-signing) client from the stored identity.
 pub struct Wallet {
-    client: BankClient,
+    bank_url: String,
     store: Store,
 }
 
@@ -35,36 +36,77 @@ impl Wallet {
     /// Open a wallet talking to the bank at `bank_url`, with its store at `store_path`.
     pub fn open(bank_url: String, store_path: impl AsRef<Path>) -> Result<Self, WalletError> {
         Ok(Self {
-            client: BankClient::new(bank_url),
+            bank_url,
             store: Store::open(store_path)?,
         })
     }
 
-    /// Create this wallet's account with a starting balance and record the id locally.
-    pub fn create_account(
+    /// Register this wallet's Ed25519 identity for `account_id`, receiving a bank-issued mTLS
+    /// client certificate and persisting the identity locally. `enroll_url` is the bank's
+    /// server-TLS enrollment endpoint (registration cannot use mTLS, since it is how the
+    /// client certificate is obtained); `ca_cert_pem` pins the bank (spec v1.2 section 2).
+    pub fn register(
         &self,
         account_id: &str,
+        ca_cert_pem: &str,
+        enroll_url: &str,
+    ) -> Result<(), WalletError> {
+        let keypair = IdentityKeypair::generate()?;
+        let enroll = EnrollClient::new(enroll_url.to_string(), ca_cert_pem)?;
+        let response = enroll.register(&RegisterRequest {
+            account_id: account_id.to_string(),
+            public_key_hex: hex::encode(keypair.public_key().to_bytes()),
+        })?;
+        self.store.set_identity(&StoredIdentity {
+            account_id: account_id.to_string(),
+            secret: keypair.secret_bytes(),
+            client_cert_pem: response.client_cert_pem,
+            client_key_pem: response.client_key_pem,
+            ca_cert_pem: response.ca_cert_pem,
+        })?;
+        Ok(())
+    }
+
+    /// Build an authenticated client from the stored identity, returning it alongside the
+    /// wallet's account id.
+    fn client(&self) -> Result<(BankClient, String), WalletError> {
+        let identity = self.store.identity()?.ok_or(WalletError::NotRegistered)?;
+        let account_id = identity.account_id.clone();
+        let client = BankClient::new(
+            self.bank_url.clone(),
+            identity.account_id,
+            IdentityKeypair::from_secret_bytes(&identity.secret),
+            &identity.ca_cert_pem,
+            &identity.client_cert_pem,
+            &identity.client_key_pem,
+        )?;
+        Ok((client, account_id))
+    }
+
+    /// Create this wallet's account with a starting balance (demo credit), signed under the
+    /// registered identity.
+    pub fn create_account(
+        &self,
         initial_balance_cents: u64,
     ) -> Result<BalanceResponse, WalletError> {
-        let response = self.client.create_account(&CreateAccountRequest {
-            account_id: account_id.to_string(),
+        let (client, account_id) = self.client()?;
+        client.create_account(&CreateAccountRequest {
+            account_id,
             initial_balance_cents,
-        })?;
-        self.store.set_account_id(account_id)?;
-        Ok(response)
+        })
     }
 
     /// The balance of this wallet's account, as reported by the bank.
     pub fn balance(&self) -> Result<BalanceResponse, WalletError> {
-        let account_id = self.store.account_id()?.ok_or(WalletError::NoAccount)?;
-        self.client.balance(&account_id)
+        let (client, account_id) = self.client()?;
+        client.balance(&account_id)
     }
 
     /// Withdraw `amount_cents`, decomposing it greedily into denomination coins. Each coin
     /// is blinded, signed by the bank, unblinded, verified locally, and stored.
     pub fn withdraw(&self, amount_cents: u64) -> Result<Vec<Coin>, WalletError> {
-        let account_id = self.store.account_id()?.ok_or(WalletError::NoAccount)?;
-        let keys = self.bank_public_keys()?;
+        let (client, account_id) = self.client()?;
+        let keys = bank_public_keys(&client)?;
         let mut coins = Vec::new();
         for denomination_cents in decompose(amount_cents) {
             let pk = keys
@@ -72,7 +114,7 @@ impl Wallet {
                 .ok_or(WalletError::UnknownDenomination(denomination_cents))?;
             let serial = Serial::generate()?;
             let blinding = blind(pk, &mut DefaultRng, &serial)?;
-            let response = self.client.withdraw(&WithdrawRequest {
+            let response = client.withdraw(&WithdrawRequest {
                 account_id: account_id.clone(),
                 request_id: new_request_id()?,
                 denomination_cents,
@@ -127,12 +169,12 @@ impl Wallet {
     /// the per-coin outcome. Accepted coins credit the account; already-spent serials are
     /// rejected as double-spends.
     pub fn deposit(&self, bundle_path: &Path) -> Result<Vec<DepositOutcome>, WalletError> {
-        let account_id = self.store.account_id()?.ok_or(WalletError::NoAccount)?;
+        let (client, account_id) = self.client()?;
         let coins: Vec<Coin> = serde_json::from_slice(&std::fs::read(bundle_path)?)?;
         let mut outcomes = Vec::new();
         for coin in coins {
             let denomination_cents = coin.denomination_cents;
-            let response = self.client.deposit(&DepositRequest {
+            let response = client.deposit(&DepositRequest {
                 coin,
                 account_id: account_id.clone(),
                 request_id: new_request_id()?,
@@ -145,22 +187,24 @@ impl Wallet {
         }
         Ok(outcomes)
     }
+}
 
-    /// Fetch and parse the bank's denomination public keys (scheme 0 only), keyed by
-    /// denomination.
-    fn bank_public_keys(&self) -> Result<HashMap<u64, DenominationPublicKey>, WalletError> {
-        let response = self.client.denominations()?;
-        let mut keys = HashMap::new();
-        for key in response.denominations {
-            if key.scheme_id != SCHEME_ID_RSA_DETERMINISTIC {
-                continue;
-            }
-            let pk = DenominationPublicKey::from_spki(&key.public_key_spki)
-                .map_err(|e| WalletError::KeyParse(e.to_string()))?;
-            keys.insert(key.denomination_cents, pk);
+/// Fetch and parse the bank's denomination public keys (scheme 0 only), keyed by
+/// denomination.
+fn bank_public_keys(
+    client: &BankClient,
+) -> Result<HashMap<u64, DenominationPublicKey>, WalletError> {
+    let response = client.denominations()?;
+    let mut keys = HashMap::new();
+    for key in response.denominations {
+        if key.scheme_id != SCHEME_ID_RSA_DETERMINISTIC {
+            continue;
         }
-        Ok(keys)
+        let pk = DenominationPublicKey::from_spki(&key.public_key_spki)
+            .map_err(|e| WalletError::KeyParse(e.to_string()))?;
+        keys.insert(key.denomination_cents, pk);
     }
+    Ok(keys)
 }
 
 /// Greedy powers-of-two decomposition, largest denomination first. Since the denomination
@@ -205,20 +249,33 @@ fn select_exact(mut coins: Vec<Coin>, amount: u64) -> Option<Vec<Coin>> {
 
 #[cfg(test)]
 mod tests {
-    use super::Wallet;
-    use crate::testutil::spawn_test_bank;
+    use super::{bank_public_keys, Wallet};
+    use crate::testutil::spawn_armed_bank;
     use crate::WalletError;
     use tempfile::TempDir;
 
-    #[test]
-    fn create_account_and_read_balance() {
-        let (url, _bank) = spawn_test_bank(&[]);
-        let store = TempDir::new().expect("store tempdir");
-        let wallet = Wallet::open(url, store.path().join("store")).expect("wallet open");
+    /// Open a wallet, register `account` (obtaining an mTLS client cert), and create its
+    /// account with `balance`.
+    fn registered_wallet(
+        bank: &crate::testutil::ArmedBank,
+        store: &TempDir,
+        account: &str,
+        balance: u64,
+    ) -> Wallet {
+        let wallet = Wallet::open(bank.api_url.clone(), store.path().join("store"))
+            .expect("wallet open");
+        wallet
+            .register(account, &bank.ca_cert_pem, &bank.enroll_url)
+            .expect("register");
+        wallet.create_account(balance).expect("create account");
+        wallet
+    }
 
-        let created = wallet.create_account("alice", 500).expect("create account");
-        assert_eq!(created.account_id, "alice");
-        assert_eq!(created.balance_cents, 500);
+    #[test]
+    fn register_create_account_and_read_balance() {
+        let bank = spawn_armed_bank(&[]);
+        let store = TempDir::new().expect("store tempdir");
+        let wallet = registered_wallet(&bank, &store, "alice", 500);
 
         let balance = wallet.balance().expect("balance");
         assert_eq!(balance.account_id, "alice");
@@ -226,11 +283,11 @@ mod tests {
     }
 
     #[test]
-    fn balance_without_account_errors() {
-        let (url, _bank) = spawn_test_bank(&[]);
+    fn operations_require_registration() {
+        let bank = spawn_armed_bank(&[]);
         let store = TempDir::new().expect("store tempdir");
-        let wallet = Wallet::open(url, store.path().join("store")).expect("wallet open");
-        assert!(matches!(wallet.balance(), Err(WalletError::NoAccount)));
+        let wallet = Wallet::open(bank.api_url, store.path().join("store")).expect("wallet open");
+        assert!(matches!(wallet.balance(), Err(WalletError::NotRegistered)));
     }
 
     #[test]
@@ -244,13 +301,12 @@ mod tests {
     }
 
     #[test]
-    fn withdraw_decomposes_and_stores_verifiable_coins() {
-        use digicash_core::{verify, DenominationPublicKey, Serial, Signature};
+    fn signed_withdraw_decomposes_and_stores_verifiable_coins() {
+        use digicash_core::{verify, Serial, Signature};
 
-        let (url, _bank) = spawn_test_bank(&[64, 512]);
+        let bank = spawn_armed_bank(&[64, 512]);
         let store = TempDir::new().expect("store tempdir");
-        let wallet = Wallet::open(url.clone(), store.path().join("store")).expect("wallet open");
-        wallet.create_account("alice", 1000).expect("account");
+        let wallet = registered_wallet(&bank, &store, "alice", 1000);
 
         let coins = wallet.withdraw(576).expect("withdraw");
         let mut denoms: Vec<u64> = coins.iter().map(|c| c.denomination_cents).collect();
@@ -266,18 +322,14 @@ mod tests {
         stored.sort_unstable();
         assert_eq!(stored, vec![64, 512], "coins not stored locally");
 
-        let published = crate::BankClient::new(url)
-            .denominations()
-            .expect("denominations");
+        // Independently verify each coin against the bank's published keys, fetched over the
+        // wallet's own authenticated client.
+        let (client, _account) = wallet.client().expect("client");
+        let keys = bank_public_keys(&client).expect("published keys");
         for coin in &coins {
-            let entry = published
-                .denominations
-                .iter()
-                .find(|k| k.denomination_cents == coin.denomination_cents)
-                .expect("published key");
-            let pk = DenominationPublicKey::from_spki(&entry.public_key_spki).expect("spki");
+            let pk = keys.get(&coin.denomination_cents).expect("published key");
             verify(
-                &pk,
+                pk,
                 &Serial::from_bytes(coin.serial_number),
                 &Signature(coin.signature.clone()),
             )
@@ -319,11 +371,10 @@ mod tests {
     fn spend_writes_bundle_and_removes_selected_coins() {
         use digicash_proto::Coin;
 
-        let (url, _bank) = spawn_test_bank(&[64, 512]);
+        let bank = spawn_armed_bank(&[64, 512]);
         let store_dir = TempDir::new().expect("store");
         let out_dir = TempDir::new().expect("out");
-        let wallet = Wallet::open(url, store_dir.path().join("store")).expect("wallet");
-        wallet.create_account("alice", 1000).expect("account");
+        let wallet = registered_wallet(&bank, &store_dir, "alice", 1000);
         wallet.withdraw(576).expect("withdraw"); // coins [512, 64]
 
         let bundle_path = out_dir.path().join("bundle.json");
@@ -358,20 +409,19 @@ mod tests {
     fn deposit_accepts_then_rejects_replay() {
         use digicash_proto::DepositRejection;
 
-        let (url, _bank) = spawn_test_bank(&[64, 512]);
-        let stores = TempDir::new().expect("stores");
+        let bank = spawn_armed_bank(&[64, 512]);
+        let payer_store = TempDir::new().expect("payer store");
+        let payee_store = TempDir::new().expect("payee store");
         let out_dir = TempDir::new().expect("out");
 
         // Payer withdraws and spends a bundle out of band.
-        let payer = Wallet::open(url.clone(), stores.path().join("payer")).expect("payer");
-        payer.create_account("alice", 1000).expect("alice");
+        let payer = registered_wallet(&bank, &payer_store, "alice", 1000);
         payer.withdraw(576).expect("withdraw");
         let bundle = out_dir.path().join("bundle.json");
         payer.spend(576, &bundle).expect("spend");
 
-        // Payee deposits the received bundle to its own account.
-        let payee = Wallet::open(url, stores.path().join("payee")).expect("payee");
-        payee.create_account("bob", 0).expect("bob");
+        // Payee registers its own account and deposits the received bundle.
+        let payee = registered_wallet(&bank, &payee_store, "bob", 0);
         let outcomes = payee.deposit(&bundle).expect("deposit");
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes.iter().all(|o| o.accepted), "a coin was rejected: {outcomes:?}");

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use digicash_core::IDENTITY_SECRET_KEY_LEN;
 use digicash_proto::Coin;
 
 use crate::error::WalletError;
@@ -7,6 +8,24 @@ use crate::error::WalletError;
 const COINS_TREE: &str = "coins";
 const META_TREE: &str = "meta";
 const ACCOUNT_ID_KEY: &[u8] = b"account_id";
+const IDENTITY_SECRET_KEY: &[u8] = b"identity_secret";
+const CLIENT_CERT_KEY: &[u8] = b"client_cert_pem";
+const CLIENT_KEY_KEY: &[u8] = b"client_key_pem";
+const CA_CERT_KEY: &[u8] = b"ca_cert_pem";
+
+/// The wallet's persisted mTLS + signing identity, established at registration.
+pub struct StoredIdentity {
+    /// The account id this identity is registered under.
+    pub account_id: String,
+    /// The Ed25519 secret seed used to sign requests.
+    pub secret: [u8; IDENTITY_SECRET_KEY_LEN],
+    /// The bank-issued client certificate, PEM.
+    pub client_cert_pem: String,
+    /// The client private key, PEM.
+    pub client_key_pem: String,
+    /// The bank's CA certificate, PEM, used to pin the bank.
+    pub ca_cert_pem: String,
+}
 
 /// The wallet's local coin store, backed by sled. Coins are bearer instruments, keyed by
 /// their 32-byte serial number, and survive restarts. The meta tree holds the wallet's
@@ -41,6 +60,53 @@ impl Store {
             )),
             None => Ok(None),
         }
+    }
+
+    /// Persist the wallet's registered identity (Ed25519 secret, client certificate and key,
+    /// CA certificate) and its account id, then flush for durability. Secret material is
+    /// stored as plaintext: acceptable for a local prototype wallet only.
+    pub fn set_identity(&self, identity: &StoredIdentity) -> Result<(), WalletError> {
+        self.meta
+            .insert(ACCOUNT_ID_KEY, identity.account_id.as_bytes())?;
+        self.meta.insert(IDENTITY_SECRET_KEY, &identity.secret)?;
+        self.meta
+            .insert(CLIENT_CERT_KEY, identity.client_cert_pem.as_bytes())?;
+        self.meta
+            .insert(CLIENT_KEY_KEY, identity.client_key_pem.as_bytes())?;
+        self.meta
+            .insert(CA_CERT_KEY, identity.ca_cert_pem.as_bytes())?;
+        self.db.flush()?;
+        Ok(())
+    }
+
+    /// The wallet's persisted identity, or `None` if it has not registered.
+    pub fn identity(&self) -> Result<Option<StoredIdentity>, WalletError> {
+        let Some(account_id) = self.account_id()? else {
+            return Ok(None);
+        };
+        let Some(secret_bytes) = self.meta.get(IDENTITY_SECRET_KEY)? else {
+            return Ok(None);
+        };
+        let secret: [u8; IDENTITY_SECRET_KEY_LEN] = secret_bytes
+            .as_ref()
+            .try_into()
+            .map_err(|_| WalletError::CorruptIdentity("secret key is the wrong length"))?;
+        Ok(Some(StoredIdentity {
+            account_id,
+            secret,
+            client_cert_pem: self.meta_string(CLIENT_CERT_KEY)?,
+            client_key_pem: self.meta_string(CLIENT_KEY_KEY)?,
+            ca_cert_pem: self.meta_string(CA_CERT_KEY)?,
+        }))
+    }
+
+    fn meta_string(&self, key: &[u8]) -> Result<String, WalletError> {
+        let bytes = self
+            .meta
+            .get(key)?
+            .ok_or(WalletError::CorruptIdentity("identity record is incomplete"))?;
+        String::from_utf8(bytes.to_vec())
+            .map_err(|_| WalletError::CorruptIdentity("identity record is not UTF-8"))
     }
 
     /// Store a coin, keyed by its serial number, and flush for durability.
