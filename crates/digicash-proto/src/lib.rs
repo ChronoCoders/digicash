@@ -14,6 +14,13 @@ pub use messages::{
     ErrorResponse, WithdrawRequest, WithdrawResponse,
 };
 
+/// The coin denominations, in integer cents: powers of two from 1 to 8192 (spec v0.3
+/// section 3). One bank key exists per denomination, and the wallet decomposes amounts
+/// over this set. Single source of truth shared by the bank and the wallet.
+pub const DENOMINATIONS: [u64; 14] = [
+    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +107,13 @@ mod tests {
         roundtrip(ErrorResponse {
             error: "insufficient balance".into(),
         });
+    }
+
+    #[test]
+    fn denominations_are_ascending_powers_of_two() {
+        for (i, &denom) in DENOMINATIONS.iter().enumerate() {
+            assert_eq!(denom, 1u64 << i, "denomination at index {i} is not 2^{i}");
+        }
+        assert_eq!(DENOMINATIONS[DENOMINATIONS.len() - 1], 8192);
     }
 }
