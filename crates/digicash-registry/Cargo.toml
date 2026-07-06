@@ -1,0 +1,38 @@
+[package]
+name = "digicash-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Permissioned multi-bank registry for the digicash e-cash prototype: shared spent-serial + transcript store, per-issuer exposure caps, and settlement claim ledger. Experimental and unaudited."
+
+[lints]
+workspace = true
+
+[features]
+# Exposes `test_support` (isolated Postgres test databases) to downstream dev-dependencies.
+test-support = []
+
+[dependencies]
+digicash-core = { workspace = true }
+digicash-proto = { workspace = true }
+digicash-bank = { workspace = true }
+axum = "0.8"
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+deadpool-postgres = "0.14"
+hex = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio-postgres = "0.7"
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tower = { version = "0.5", features = ["util"] }
