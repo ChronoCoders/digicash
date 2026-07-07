@@ -62,6 +62,11 @@ pub enum DepositRejection {
     UnknownAccount,
     /// The `request_id` was already used for a different coin.
     RequestIdReuse,
+    /// The multi-bank registry reported the coin as an already-spent (cross-bank) serial.
+    RegistryDoubleSpend,
+    /// The multi-bank registry rejected the deposit: the depositing bank's outstanding
+    /// receivable against the issuer has reached the exposure cap.
+    ExposureCapExceeded,
 }
 
 /// `POST /accounts` request. Demo-only: this credits a starting balance with no funding

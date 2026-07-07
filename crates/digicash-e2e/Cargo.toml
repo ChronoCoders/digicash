@@ -12,6 +12,7 @@ workspace = true
 digicash-core = { workspace = true }
 digicash-bank = { workspace = true, features = ["test-support"] }
 digicash-proto = { workspace = true }
+digicash-registry = { workspace = true, features = ["test-support"] }
 digicash-wallet = { workspace = true }
 hex = "0.4"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

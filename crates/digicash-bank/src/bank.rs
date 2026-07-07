@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use deadpool_postgres::Pool;
 use digicash_core::{
@@ -8,12 +9,13 @@ use digicash_core::{
 };
 use digicash_proto::{
     BalanceResponse, DenominationKey, DepositRejection, DepositRequest, DepositResponse,
-    WithdrawRequest, WithdrawResponse,
+    SerialOutcome, WithdrawRequest, WithdrawResponse,
 };
 
 use crate::db;
 use crate::error::BankError;
 use crate::keys::KeyStore;
+use crate::registry_client::RegistryClient;
 
 /// Purge expired nonces once every this many recorded nonces, bounding the store between the
 /// startup purge without a delete on every request.
@@ -83,6 +85,7 @@ pub struct Bank {
     pool: Pool,
     nonce_ops: AtomicU64,
     keys: KeyStore,
+    registry_client: Option<Arc<RegistryClient>>,
 }
 
 impl Bank {
@@ -98,10 +101,12 @@ impl Bank {
         db::run_migrations(database_url).await?;
         let pool = db::create_pool(database_url)?;
         let keys = KeyStore::load_or_create(key_dir, denominations)?;
+        let registry_client = RegistryClient::from_env(key_dir)?.map(Arc::new);
         let bank = Self {
             pool,
             nonce_ops: AtomicU64::new(0),
             keys,
+            registry_client,
         };
         bank.recover_withdrawals().await?;
         bank.purge_expired_nonces(now_unix()).await?;
@@ -570,6 +575,27 @@ impl Bank {
         let signature = Signature(coin.signature.clone());
         if verify(&keypair.pk, &serial, &signature).is_err() {
             return Ok(reject(DepositRejection::InvalidSignature));
+        }
+        // Multi-bank check (production-spec v1.4 section 10): submit the serial to the shared
+        // registry, if configured, before crediting. A cross-bank double-spend or an exceeded
+        // exposure cap rejects the deposit. Single-bank operation skips this.
+        if let Some(client) = &self.registry_client {
+            let client = client.clone();
+            let (denom, scheme, serial_bytes, now) =
+                (coin.denomination_cents, coin.scheme_id, coin.serial_number, now_unix());
+            let outcome =
+                tokio::task::spawn_blocking(move || client.submit_serial(denom, scheme, &serial_bytes, now))
+                    .await
+                    .map_err(|e| BankError::RegistryHttp(format!("registry task join: {e}")))??;
+            match outcome {
+                SerialOutcome::Accepted => {}
+                SerialOutcome::DoubleSpend => {
+                    return Ok(reject(DepositRejection::RegistryDoubleSpend));
+                }
+                SerialOutcome::ExposureCapExceeded => {
+                    return Ok(reject(DepositRejection::ExposureCapExceeded));
+                }
+            }
         }
         Ok(match self.commit_deposit(req).await? {
             DepositOutcome::Accepted | DepositOutcome::Replay => DepositResponse {

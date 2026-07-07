@@ -104,6 +104,8 @@ mod tests {
             DepositRejection::UnknownScheme,
             DepositRejection::UnknownAccount,
             DepositRejection::RequestIdReuse,
+            DepositRejection::RegistryDoubleSpend,
+            DepositRejection::ExposureCapExceeded,
         ] {
             roundtrip(reason);
         }

@@ -14,6 +14,7 @@ mod bank;
 mod db;
 mod error;
 mod keys;
+mod registry_client;
 mod serve;
 mod tls;
 
@@ -28,5 +29,6 @@ pub use auth::{verify_signed_request, AuthenticatedAccount};
 pub use bank::Bank;
 pub use digicash_proto::DENOMINATIONS;
 pub use error::BankError;
+pub use registry_client::RegistryClient;
 pub use serve::serve_tls;
 pub use tls::{CertAuthority, ClientIdentity};

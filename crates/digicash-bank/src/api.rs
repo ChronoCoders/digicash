@@ -260,7 +260,9 @@ impl From<BankError> for ApiError {
             | BankError::PoolBuild(_)
             | BankError::Sqlx(_)
             | BankError::Migrate(_)
-            | BankError::ValueRange(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | BankError::ValueRange(_)
+            | BankError::RegistryConfig(_)
+            | BankError::RegistryHttp(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,

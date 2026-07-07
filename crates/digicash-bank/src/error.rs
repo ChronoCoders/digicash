@@ -131,4 +131,13 @@ pub enum BankError {
     /// Registration was requested for an account that already has a registered identity key.
     #[error("account {0} already has a registered identity key")]
     IdentityExists(String),
+
+    /// The multi-bank registry client is misconfigured (a required env var or identity file
+    /// is missing or malformed).
+    #[error("registry client configuration error: {0}")]
+    RegistryConfig(String),
+
+    /// A request to the multi-bank registry failed (transport, TLS, or a non-2xx status).
+    #[error("registry request failed: {0}")]
+    RegistryHttp(String),
 }
