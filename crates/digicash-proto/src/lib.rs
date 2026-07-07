@@ -19,8 +19,8 @@ pub use auth::{
 };
 pub use coin::Coin;
 pub use registry::{
-    MemberInfo, MembersResponse, RegisterMemberRequest, SerialOutcome, SerialResponse,
-    SerialSubmission, TranscriptEntry,
+    CapInfo, CapsResponse, MemberInfo, MembersResponse, RegisterMemberRequest, SerialOutcome,
+    SerialResponse, SerialSubmission, SetCapRequest, TranscriptEntry,
 };
 pub use messages::{
     BalanceResponse, CreateAccountRequest, DenominationKey, DenominationsResponse,

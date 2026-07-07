@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use deadpool_postgres::Pool;
 use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
-use digicash_proto::{MemberInfo, SerialOutcome, SerialResponse, TranscriptEntry};
+use digicash_proto::{
+    CapInfo, MemberInfo, SerialOutcome, SerialResponse, SerialSubmission, TranscriptEntry,
+};
 
 use crate::db;
 use crate::error::RegistryError;
@@ -120,17 +122,47 @@ impl Registry {
     pub(crate) async fn submit_serial(
         &self,
         depositing_bank_id: &str,
-        denomination_cents: u64,
-        scheme_id: u8,
-        serial_hex: &str,
-        transcript: &str,
+        submission: &SerialSubmission,
         now: u64,
     ) -> Result<SerialResponse, RegistryError> {
-        let denom = to_i64(denomination_cents, "denomination")?;
-        let scheme = i16::from(scheme_id);
+        let issuing_bank_id = submission.issuing_bank_id.as_str();
+        let serial_hex = submission.serial_hex.as_str();
+        let transcript = submission.transcript.as_str();
+        let denom = to_i64(submission.denomination_cents, "denomination")?;
+        let scheme = i16::from(submission.scheme_id);
         let seen = to_i64(now, "timestamp")?;
         let mut client = self.client().await?;
         let tx = client.transaction().await?;
+
+        // Exposure cap: if a cap is set and the outstanding receivable has reached it, reject
+        // before recording anything (production-spec v1.4 section 10). The transaction is
+        // dropped (rolled back) on the early return, so nothing is written.
+        let cap: Option<i64> = tx
+            .query_opt(
+                "SELECT cap_cents FROM exposure_caps \
+                 WHERE issuing_bank_id = $1 AND depositing_bank_id = $2",
+                &[&issuing_bank_id, &depositing_bank_id],
+            )
+            .await?
+            .map(|r| r.get(0));
+        if let Some(cap) = cap {
+            let outstanding: i64 = tx
+                .query_opt(
+                    "SELECT amount_cents FROM receivables \
+                     WHERE issuing_bank_id = $1 AND depositing_bank_id = $2",
+                    &[&issuing_bank_id, &depositing_bank_id],
+                )
+                .await?
+                .map(|r| r.get(0))
+                .unwrap_or(0);
+            if outstanding >= cap {
+                return Ok(SerialResponse {
+                    outcome: SerialOutcome::ExposureCapExceeded,
+                    transcripts: Vec::new(),
+                });
+            }
+        }
+
         tx.execute(
             "INSERT INTO transcripts \
              (denomination_cents, scheme_id, serial_hex, bank_id, transcript, seen_at) \
@@ -147,6 +179,15 @@ impl Registry {
             )
             .await?;
         let (outcome, transcripts) = if inserted == 1 {
+            // Fresh serial: the depositing bank's receivable against the issuer grows.
+            tx.execute(
+                "INSERT INTO receivables (issuing_bank_id, depositing_bank_id, amount_cents) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT (issuing_bank_id, depositing_bank_id) \
+                 DO UPDATE SET amount_cents = receivables.amount_cents + EXCLUDED.amount_cents",
+                &[&issuing_bank_id, &depositing_bank_id, &denom],
+            )
+            .await?;
             (SerialOutcome::Accepted, Vec::new())
         } else {
             let rows = tx
@@ -172,6 +213,49 @@ impl Registry {
             outcome,
             transcripts,
         })
+    }
+
+    /// Set (or update) the per-issuer exposure cap for a bank pair (admin governance).
+    pub(crate) async fn set_cap(
+        &self,
+        issuing_bank_id: &str,
+        depositing_bank_id: &str,
+        cap_cents: u64,
+    ) -> Result<(), RegistryError> {
+        let cap = to_i64(cap_cents, "cap")?;
+        self.client()
+            .await?
+            .execute(
+                "INSERT INTO exposure_caps (issuing_bank_id, depositing_bank_id, cap_cents) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT (issuing_bank_id, depositing_bank_id) \
+                 DO UPDATE SET cap_cents = EXCLUDED.cap_cents",
+                &[&issuing_bank_id, &depositing_bank_id, &cap],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Every published exposure cap, in ascending `(issuing, depositing)` order.
+    pub(crate) async fn list_caps(&self) -> Result<Vec<CapInfo>, RegistryError> {
+        let rows = self
+            .client()
+            .await?
+            .query(
+                "SELECT issuing_bank_id, depositing_bank_id, cap_cents FROM exposure_caps \
+                 ORDER BY issuing_bank_id, depositing_bank_id",
+                &[],
+            )
+            .await?;
+        let mut caps = Vec::new();
+        for row in rows {
+            caps.push(CapInfo {
+                issuing_bank_id: row.get(0),
+                depositing_bank_id: row.get(1),
+                cap_cents: to_u64(row.get::<_, i64>(2), "cap")?,
+            });
+        }
+        Ok(caps)
     }
 
     /// Record `nonce` as seen at `now`, returning `true` if fresh and `false` on replay within

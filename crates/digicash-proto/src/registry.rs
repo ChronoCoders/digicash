@@ -46,7 +46,8 @@ pub struct SerialSubmission {
     pub transcript: String,
 }
 
-/// Whether a submitted serial was fresh or a double-spend.
+/// Whether a submitted serial was accepted, rejected as a double-spend, or blocked by the
+/// per-issuer exposure cap.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SerialOutcome {
@@ -54,6 +55,38 @@ pub enum SerialOutcome {
     Accepted,
     /// The serial was already deposited (possibly at another bank).
     DoubleSpend,
+    /// The depositing bank's outstanding receivable against the issuer has reached the cap;
+    /// no further coins from that issuer are accepted until settlement clears.
+    ExposureCapExceeded,
+}
+
+/// `POST /caps` request (admin): set the per-issuer exposure cap for a bank pair.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct SetCapRequest {
+    /// The issuing bank the cap limits exposure to.
+    pub issuing_bank_id: String,
+    /// The depositing bank that holds the receivable.
+    pub depositing_bank_id: String,
+    /// The maximum outstanding receivable, in cents.
+    pub cap_cents: u64,
+}
+
+/// One published exposure cap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CapInfo {
+    /// The issuing bank.
+    pub issuing_bank_id: String,
+    /// The depositing bank.
+    pub depositing_bank_id: String,
+    /// The cap, in cents.
+    pub cap_cents: u64,
+}
+
+/// Response of `GET /caps`: the published exposure caps.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct CapsResponse {
+    /// The caps, in ascending `(issuing, depositing)` order.
+    pub caps: Vec<CapInfo>,
 }
 
 /// One submitted transcript digest for a serial, retained for attribution.

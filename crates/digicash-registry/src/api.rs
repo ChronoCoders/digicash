@@ -6,7 +6,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
-use digicash_proto::{MembersResponse, RegisterMemberRequest, SerialResponse, SerialSubmission};
+use digicash_proto::{
+    CapsResponse, MembersResponse, RegisterMemberRequest, SerialResponse, SerialSubmission,
+    SetCapRequest,
+};
 use serde::Serialize;
 
 use crate::auth::{verify_signed_request, AuthenticatedBank};
@@ -23,6 +26,7 @@ pub fn router(registry: Arc<Registry>) -> Router {
     let protected = Router::new()
         .route("/members", post(register_member).get(list_members))
         .route("/serials", post(post_serial))
+        .route("/caps", get(get_caps).post(set_cap))
         .route_layer(axum::middleware::from_fn_with_state(
             registry.clone(),
             verify_signed_request,
@@ -66,17 +70,29 @@ async fn post_serial(
     Extension(auth): Extension<AuthenticatedBank>,
     Json(req): Json<SerialSubmission>,
 ) -> Result<Json<SerialResponse>, ApiError> {
-    let response = registry
-        .submit_serial(
-            &auth.0,
-            req.denomination_cents,
-            req.scheme_id,
-            &req.serial_hex,
-            &req.transcript,
-            now_unix(),
-        )
-        .await?;
+    let response = registry.submit_serial(&auth.0, &req, now_unix()).await?;
     Ok(Json(response))
+}
+
+async fn get_caps(
+    State(registry): State<Arc<Registry>>,
+    Extension(_auth): Extension<AuthenticatedBank>,
+) -> Result<Json<CapsResponse>, ApiError> {
+    Ok(Json(CapsResponse {
+        caps: registry.list_caps().await?,
+    }))
+}
+
+async fn set_cap(
+    State(registry): State<Arc<Registry>>,
+    Extension(auth): Extension<AuthenticatedBank>,
+    Json(req): Json<SetCapRequest>,
+) -> Result<StatusCode, ApiError> {
+    ensure_admin(&registry, &auth).await?;
+    registry
+        .set_cap(&req.issuing_bank_id, &req.depositing_bank_id, req.cap_cents)
+        .await?;
+    Ok(StatusCode::OK)
 }
 
 /// Reject a request whose authenticated caller is not the governance admin.
@@ -146,8 +162,9 @@ mod tests {
     use axum::response::Response;
     use digicash_core::{canonical_payload, IdentityKeypair};
     use digicash_proto::{
-        MembersResponse, RegisterMemberRequest, SerialOutcome, SerialResponse, SerialSubmission,
-        HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+        CapsResponse, MembersResponse, RegisterMemberRequest, SerialOutcome, SerialResponse,
+        SerialSubmission, SetCapRequest, HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE,
+        HEADER_TIMESTAMP,
     };
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -318,6 +335,89 @@ mod tests {
             banks.contains(&"bank-b") && banks.contains(&"bank-a"),
             "cross-bank collision must retain both banks' transcripts: {banks:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn exposure_cap_enforced_and_updatable() {
+        let Some(db) = TestDatabase::create().await.expect("test db") else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
+        let registry = Registry::connect(db.url()).await.expect("registry");
+        let admin = IdentityKeypair::generate().expect("admin");
+        let bank_b = IdentityKeypair::generate().expect("b");
+        registry.register_member("admin", &admin.public_key(), true).await.expect("admin");
+        registry.register_member("bank-b", &bank_b.public_key(), false).await.expect("b");
+        let app = router(Arc::new(registry));
+
+        // Admin caps bank-b's receivable against bank-a at 100 cents.
+        let cap_body = |cap: u64| {
+            serde_json::to_vec(&SetCapRequest {
+                issuing_bank_id: "bank-a".to_string(),
+                depositing_bank_id: "bank-b".to_string(),
+                cap_cents: cap,
+            })
+            .expect("serialize")
+        };
+        let resp = app
+            .clone()
+            .oneshot(signed(&admin, "admin", "POST", "/caps", &cap_body(100), "c1"))
+            .await
+            .expect("set cap");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let submit = |serial: &str, nonce: &str| {
+            let body = serde_json::to_vec(&SerialSubmission {
+                issuing_bank_id: "bank-a".to_string(),
+                denomination_cents: 64,
+                scheme_id: 0,
+                serial_hex: serial.to_string(),
+                transcript: format!("t-{serial}"),
+            })
+            .expect("serialize");
+            signed(&bank_b, "bank-b", "POST", "/serials", &body, nonce)
+        };
+        let outcome = |resp: SerialResponse| resp.outcome;
+
+        // Two 64-cent deposits fit under the 100-cap (outstanding 0, then 64).
+        assert_eq!(
+            outcome(json_body(app.clone().oneshot(submit("s1", "n1")).await.expect("s1")).await),
+            SerialOutcome::Accepted
+        );
+        assert_eq!(
+            outcome(json_body(app.clone().oneshot(submit("s2", "n2")).await.expect("s2")).await),
+            SerialOutcome::Accepted
+        );
+        // Outstanding is now 128 >= 100: the next deposit is capped.
+        assert_eq!(
+            outcome(json_body(app.clone().oneshot(submit("s3", "n3")).await.expect("s3")).await),
+            SerialOutcome::ExposureCapExceeded
+        );
+
+        // Admin raises the cap to 500; the previously-capped serial now goes through.
+        let resp = app
+            .clone()
+            .oneshot(signed(&admin, "admin", "POST", "/caps", &cap_body(500), "c2"))
+            .await
+            .expect("raise cap");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            outcome(json_body(app.clone().oneshot(submit("s3", "n4")).await.expect("s3 again")).await),
+            SerialOutcome::Accepted
+        );
+
+        // GET /caps publishes the updated cap.
+        let resp = app
+            .oneshot(signed(&admin, "admin", "GET", "/caps", b"", "n5"))
+            .await
+            .expect("get caps");
+        let caps: CapsResponse = json_body(resp).await;
+        let cap = caps
+            .caps
+            .iter()
+            .find(|c| c.issuing_bank_id == "bank-a" && c.depositing_bank_id == "bank-b")
+            .expect("cap present");
+        assert_eq!(cap.cap_cents, 500);
     }
 
     #[tokio::test]
