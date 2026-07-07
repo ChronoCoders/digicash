@@ -2,8 +2,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use deadpool_postgres::Pool;
 use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
+use std::collections::{HashMap, HashSet};
+
 use digicash_proto::{
-    CapInfo, MemberInfo, SerialOutcome, SerialResponse, SerialSubmission, TranscriptEntry,
+    CapInfo, MemberInfo, SerialOutcome, SerialResponse, SerialSubmission, SettlementClaimInfo,
+    TranscriptEntry,
 };
 
 use crate::db;
@@ -213,6 +216,68 @@ impl Registry {
             outcome,
             transcripts,
         })
+    }
+
+    /// Net the accumulated receivables into settlement claims (production-spec v1.4 section
+    /// 10). For each bank pair, the net = receivable(issuer -> depositor) minus the reverse;
+    /// a claim is written in the net direction, an append-only ledger row per pair. The
+    /// receivables are then cleared, so an immediate re-run nets nothing (idempotent). No
+    /// money moves automatically - that is the banking layer's concern.
+    pub(crate) async fn settle(&self, now: u64) -> Result<Vec<SettlementClaimInfo>, RegistryError> {
+        let window_end = to_i64(now, "window end")?;
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        let rows = tx
+            .query(
+                "SELECT issuing_bank_id, depositing_bank_id, amount_cents FROM receivables \
+                 WHERE amount_cents > 0",
+                &[],
+            )
+            .await?;
+        let mut amounts: HashMap<(String, String), i64> = HashMap::new();
+        for row in rows {
+            amounts.insert((row.get(0), row.get(1)), row.get(2));
+        }
+
+        let mut claims = Vec::new();
+        let mut done: HashSet<(String, String)> = HashSet::new();
+        for ((issuer, depositor), forward) in &amounts {
+            if done.contains(&(issuer.clone(), depositor.clone())) {
+                continue;
+            }
+            done.insert((issuer.clone(), depositor.clone()));
+            done.insert((depositor.clone(), issuer.clone()));
+            let reverse = amounts
+                .get(&(depositor.clone(), issuer.clone()))
+                .copied()
+                .unwrap_or(0);
+            let net = forward - reverse;
+            let (owes, owed, amount) = match net.cmp(&0) {
+                std::cmp::Ordering::Greater => (issuer.clone(), depositor.clone(), net),
+                std::cmp::Ordering::Less => (depositor.clone(), issuer.clone(), -net),
+                std::cmp::Ordering::Equal => continue,
+            };
+            tx.execute(
+                "INSERT INTO settlement_claims \
+                 (issuing_bank_id, depositing_bank_id, net_amount_cents, window_end, created_at) \
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[&owes, &owed, &amount, &window_end, &window_end],
+            )
+            .await?;
+            claims.push(SettlementClaimInfo {
+                issuing_bank_id: owes,
+                depositing_bank_id: owed,
+                net_amount_cents: to_u64(amount, "net")?,
+                window_end: now,
+            });
+        }
+        tx.execute("DELETE FROM receivables", &[]).await?;
+        tx.commit().await?;
+        claims.sort_by(|a, b| {
+            (&a.issuing_bank_id, &a.depositing_bank_id)
+                .cmp(&(&b.issuing_bank_id, &b.depositing_bank_id))
+        });
+        Ok(claims)
     }
 
     /// Set (or update) the per-issuer exposure cap for a bank pair (admin governance).

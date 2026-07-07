@@ -89,6 +89,28 @@ pub struct CapsResponse {
     pub caps: Vec<CapInfo>,
 }
 
+/// One netted settlement claim: the depositing bank is owed `net_amount_cents` by the issuing
+/// bank for the window (production-spec v1.4 section 10). No money moves automatically.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettlementClaimInfo {
+    /// The bank that owes (issued the net coins).
+    pub issuing_bank_id: String,
+    /// The bank that is owed (deposited the net coins).
+    pub depositing_bank_id: String,
+    /// The net amount owed, in cents.
+    pub net_amount_cents: u64,
+    /// The settlement window end, Unix seconds.
+    pub window_end: u64,
+}
+
+/// Response of `POST /settle`: the settlement claims produced by netting the accumulated
+/// receivables. Empty if there was nothing to net (an idempotent re-run).
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct SettleResponse {
+    /// The claims written, one per bank pair with a nonzero net.
+    pub claims: Vec<SettlementClaimInfo>,
+}
+
 /// One submitted transcript digest for a serial, retained for attribution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptEntry {

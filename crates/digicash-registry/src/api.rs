@@ -8,7 +8,7 @@ use axum::{Extension, Json, Router};
 use digicash_core::{IdentityPublicKey, IDENTITY_PUBLIC_KEY_LEN};
 use digicash_proto::{
     CapsResponse, MembersResponse, RegisterMemberRequest, SerialResponse, SerialSubmission,
-    SetCapRequest,
+    SetCapRequest, SettleResponse,
 };
 use serde::Serialize;
 
@@ -27,6 +27,7 @@ pub fn router(registry: Arc<Registry>) -> Router {
         .route("/members", post(register_member).get(list_members))
         .route("/serials", post(post_serial))
         .route("/caps", get(get_caps).post(set_cap))
+        .route("/settle", post(post_settle))
         .route_layer(axum::middleware::from_fn_with_state(
             registry.clone(),
             verify_signed_request,
@@ -93,6 +94,16 @@ async fn set_cap(
         .set_cap(&req.issuing_bank_id, &req.depositing_bank_id, req.cap_cents)
         .await?;
     Ok(StatusCode::OK)
+}
+
+async fn post_settle(
+    State(registry): State<Arc<Registry>>,
+    Extension(auth): Extension<AuthenticatedBank>,
+) -> Result<Json<SettleResponse>, ApiError> {
+    ensure_admin(&registry, &auth).await?;
+    Ok(Json(SettleResponse {
+        claims: registry.settle(now_unix()).await?,
+    }))
 }
 
 /// Reject a request whose authenticated caller is not the governance admin.
@@ -163,8 +174,8 @@ mod tests {
     use digicash_core::{canonical_payload, IdentityKeypair};
     use digicash_proto::{
         CapsResponse, MembersResponse, RegisterMemberRequest, SerialOutcome, SerialResponse,
-        SerialSubmission, SetCapRequest, HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE,
-        HEADER_TIMESTAMP,
+        SerialSubmission, SetCapRequest, SettleResponse, HEADER_ACCOUNT, HEADER_NONCE,
+        HEADER_SIGNATURE, HEADER_TIMESTAMP,
     };
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -418,6 +429,71 @@ mod tests {
             .find(|c| c.issuing_bank_id == "bank-a" && c.depositing_bank_id == "bank-b")
             .expect("cap present");
         assert_eq!(cap.cap_cents, 500);
+    }
+
+    #[tokio::test]
+    async fn settlement_nets_receivables_and_is_idempotent() {
+        let Some(db) = TestDatabase::create().await.expect("test db") else {
+            eprintln!("skipping: set DATABASE_URL to a Postgres instance to run this test");
+            return;
+        };
+        let registry = Registry::connect(db.url()).await.expect("registry");
+        let admin = IdentityKeypair::generate().expect("admin");
+        let bank_a = IdentityKeypair::generate().expect("a");
+        let bank_b = IdentityKeypair::generate().expect("b");
+        registry.register_member("admin", &admin.public_key(), true).await.expect("admin");
+        registry.register_member("bank-a", &bank_a.public_key(), false).await.expect("a");
+        registry.register_member("bank-b", &bank_b.public_key(), false).await.expect("b");
+        let app = router(Arc::new(registry));
+
+        let submit = |kp: &IdentityKeypair, bank: String, issuing: &str, serial: &str, nonce: &str| {
+            let body = serde_json::to_vec(&SerialSubmission {
+                issuing_bank_id: issuing.to_string(),
+                denomination_cents: 64,
+                scheme_id: 0,
+                serial_hex: serial.to_string(),
+                transcript: format!("t-{serial}"),
+            })
+            .expect("serialize");
+            signed(kp, &bank, "POST", "/serials", &body, nonce)
+        };
+
+        // bank-b deposits two of bank-a's coins (128); bank-a deposits one of bank-b's (64).
+        for (kp, bank, issuing, serial, nonce) in [
+            (&bank_b, "bank-b", "bank-a", "s1", "n1"),
+            (&bank_b, "bank-b", "bank-a", "s2", "n2"),
+            (&bank_a, "bank-a", "bank-b", "s3", "n3"),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(submit(kp, bank.to_string(), issuing, serial, nonce))
+                .await
+                .expect("submit");
+            let r: SerialResponse = json_body(resp).await;
+            assert_eq!(r.outcome, SerialOutcome::Accepted, "{serial} not accepted");
+        }
+
+        // Settle: net = 128 - 64 = 64, bank-a owes bank-b.
+        let resp = app
+            .clone()
+            .oneshot(signed(&admin, "admin", "POST", "/settle", b"", "n4"))
+            .await
+            .expect("settle");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let settled: SettleResponse = json_body(resp).await;
+        assert_eq!(settled.claims.len(), 1);
+        let claim = &settled.claims[0];
+        assert_eq!(claim.issuing_bank_id, "bank-a");
+        assert_eq!(claim.depositing_bank_id, "bank-b");
+        assert_eq!(claim.net_amount_cents, 64);
+
+        // A second settle in the same window nets nothing: idempotent.
+        let resp = app
+            .oneshot(signed(&admin, "admin", "POST", "/settle", b"", "n5"))
+            .await
+            .expect("settle again");
+        let again: SettleResponse = json_body(resp).await;
+        assert!(again.claims.is_empty(), "re-settle must produce no claims: {again:?}");
     }
 
     #[tokio::test]
